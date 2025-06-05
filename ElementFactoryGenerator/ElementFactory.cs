@@ -31,6 +31,8 @@ public class ElementFactoryGenerator : IIncrementalGenerator
 
         elementFactory.Append(
             """"
+            #nullable enable
+
             public class ElementFactory : Datamodel.Codecs.IElementFactory
             {
                 public object? GetClass(string assembly, string nameSpace, string classname)
