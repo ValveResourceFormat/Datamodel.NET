@@ -10,6 +10,7 @@
 		<IncludeSymbols>true</IncludeSymbols>
 		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
 		<IsRoslynComponent>true</IsRoslynComponent>
+		<PackageId>KeyValues2.ElementFactoryGenerator</PackageId>
 	</PropertyGroup>
 
 	<ItemGroup>
