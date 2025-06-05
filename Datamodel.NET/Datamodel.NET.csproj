@@ -4,7 +4,7 @@
     <OutputType>Library</OutputType>
     <RootNamespace>Datamodel</RootNamespace>
     <PackageId>KeyValues2</PackageId>
-    <Version>0.8</Version>
+    <Version>0.9-beta</Version>
 	<Nullable>enable</Nullable>
     <PackageLicenseFile>COPYING</PackageLicenseFile>
     <PackageReadmeFile>README.md</PackageReadmeFile>
@@ -51,4 +51,9 @@
     <Compile Remove="Tests\Properties\AssemblyInfo.cs" />
     <Compile Remove="Tests\Tests.cs" />
   </ItemGroup>
+
+  <ItemGroup>
+  	<ProjectReference Include="..\ElementFactoryGenerator\ElementFactoryGenerator.csproj" Version="0.1" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
+  </ItemGroup>
+	
 </Project>

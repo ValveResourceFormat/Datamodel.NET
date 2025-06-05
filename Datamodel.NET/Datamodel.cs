@@ -167,7 +167,7 @@ namespace Datamodel
 
             var codecConstructor = codec_type.GetConstructor(Type.EmptyTypes);
 
-            if(codecConstructor is null)
+            if (codecConstructor is null)
             {
                 throw new InvalidOperationException("Failed to get codec constructor.");
             }
@@ -241,18 +241,18 @@ namespace Datamodel
         /// <param name="defer_mode">How to handle deferred loading.</param>
         public static Datamodel Load(Stream stream, DeferredMode defer_mode = DeferredMode.Automatic)
         {
-            return Load_Internal<Element>(stream, Assembly.GetCallingAssembly(), defer_mode, null);
+            return Load_Internal<Element>(stream, defer_mode, null);
         }
         /// <summary>
         /// Loads a Datamodel from a <see cref="Stream"/>.
-        /// </summary>
+        /// </summary> 
         /// <param name="stream">The input Stream.</param>
         /// <param name="defer_mode">How to handle deferred loading.</param>
         /// <typeparam  name="T">Type hint for what the Root of this datamodel should be when using reflection</param>
         public static Datamodel Load<T>(Stream stream, DeferredMode defer_mode = DeferredMode.Automatic, ReflectionParams? reflectionParams = null)
             where T : Element
         {
-            return Load_Internal<T>(stream, Assembly.GetCallingAssembly(), defer_mode, reflectionParams);
+            return Load_Internal<T>(stream, defer_mode, reflectionParams);
         }
 
         /// <summary>
@@ -262,7 +262,7 @@ namespace Datamodel
         /// <param name="defer_mode">How to handle deferred loading.</param>
         public static Datamodel Load(byte[] data, DeferredMode defer_mode = DeferredMode.Automatic)
         {
-            return Load_Internal<Element>(new MemoryStream(data, true), Assembly.GetCallingAssembly(), defer_mode);
+            return Load_Internal<Element>(new MemoryStream(data, true), defer_mode);
         }
         /// <summary>
         /// Loads a Datamodel from a byte array.
@@ -273,7 +273,7 @@ namespace Datamodel
         public static Datamodel Load<T>(byte[] data, ReflectionParams? reflectionParams = null)
              where T : Element
         {
-            return Load_Internal<T>(new MemoryStream(data, true), Assembly.GetCallingAssembly(), DeferredMode.Disabled, reflectionParams);
+            return Load_Internal<T>(new MemoryStream(data, true), DeferredMode.Disabled, reflectionParams);
         }
 
         /// <summary>
@@ -287,7 +287,7 @@ namespace Datamodel
             Datamodel? dm = null;
             try
             {
-                dm = Load_Internal<Element>(stream, Assembly.GetCallingAssembly(), defer_mode);
+                dm = Load_Internal<Element>(stream, defer_mode);
                 return dm;
             }
             finally
@@ -304,20 +304,37 @@ namespace Datamodel
             where T : Element
         {
             using var stream = File.OpenRead(path);
-            return Load_Internal<T>(stream, Assembly.GetCallingAssembly(), DeferredMode.Disabled, reflectionParams);
+            return Load_Internal<T>(stream, DeferredMode.Disabled, reflectionParams);
         }
 
-        private static Datamodel Load_Internal<T>(Stream stream, Assembly callingAssembly, DeferredMode defer_mode = DeferredMode.Automatic, ReflectionParams? reflectionParams = null)
+        private static Datamodel Load_Internal<T>(Stream stream, DeferredMode defer_mode = DeferredMode.Automatic, ReflectionParams? reflectionParams = null)
             where T : Element
         {
-            reflectionParams ??= new ();
+            reflectionParams ??= new();
 
-            if(typeof(T) == typeof(Element))
+            var templateType = typeof(T);
+
+            if (templateType is null)
+            {
+                throw new InvalidDataException("Template type can't be null");
+            }
+
+            if (templateType == typeof(Element))
             {
                 reflectionParams.AttemptReflection = false;
             }
 
-            reflectionParams.AssembliesToSearch.Add(callingAssembly);
+            // if user doesnt specify these assume assembly and namespace of root node
+            if (reflectionParams.Assembly == string.Empty)
+            {
+                reflectionParams.Assembly = templateType.Assembly.GetName().Name!;
+            }
+
+            if (reflectionParams.Namespace == string.Empty)
+            {
+                reflectionParams.Namespace = templateType.Namespace!;
+            }
+
 
             stream.Seek(0, SeekOrigin.Begin);
             var header = string.Empty;
@@ -344,6 +361,9 @@ namespace Datamodel
 
             ICodec codec = GetCodec(encoding, encoding_version);
 
+            var typeNamespace = typeof(T).Namespace;
+            var typeAssembly = typeof(T).Assembly;
+
             var dm = codec.Decode(encoding, encoding_version, format, format_version, stream, defer_mode, reflectionParams);
             if (defer_mode == DeferredMode.Automatic && codec is IDeferredAttributeCodec deferredCodec)
             {
@@ -369,7 +389,7 @@ namespace Datamodel
             {
                 result = StubRequest(id);
 
-                if(result is null)
+                if (result is null)
                 {
                     throw new InvalidDataException("Stub request failed, result was null");
                 }
@@ -464,7 +484,7 @@ namespace Datamodel
             get => _Format;
             set
             {
-                if(value is null)
+                if (value is null)
                 {
                     throw new InvalidDataException("Format can not be null");
                 }
@@ -499,7 +519,7 @@ namespace Datamodel
             get => _Encoding;
             set
             {
-                if(value is null)
+                if (value is null)
                 {
                     throw new InvalidDataException("Encoding can not be null");
                 }
@@ -759,7 +779,7 @@ namespace Datamodel
                         local_element = null;
                 }
 
-                if(local_element is null)
+                if (local_element is null)
                 {
                     return null;
                 }
@@ -779,7 +799,7 @@ namespace Datamodel
                             var list = (System.Collections.ICollection)attr.Value;
                             var inner_type = GetArrayInnerType(list.GetType());
 
-                            if(inner_type is null)
+                            if (inner_type is null)
                             {
                                 throw new InvalidOperationException("Failed to get inner_type while importing element");
                             }
@@ -915,7 +935,7 @@ namespace Datamodel
             : base("An exception occured while destubbing an array item.", innerException)
         {
             var arrayOwner = array.Owner;
-            if(arrayOwner is not null)
+            if (arrayOwner is not null)
             {
                 Data.Add("Element", ((Element)arrayOwner).ID);
             }

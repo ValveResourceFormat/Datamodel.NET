@@ -137,7 +137,7 @@ namespace Datamodel.Codecs
 
         void CountReferences(Element? elem)
         {
-            if(elem is null)
+            if (elem is null)
             {
                 return;
             }
@@ -309,7 +309,7 @@ namespace Datamodel.Codecs
 
         private bool ShouldBeReferenced(Element? elem)
         {
-            if(elem is null)
+            if (elem is null)
             {
                 return false;
             }
@@ -336,7 +336,7 @@ namespace Datamodel.Codecs
 
             foreach (var attr in element.GetAllAttributesForSerialization())
             {
-                if (attr.Value != null) 
+                if (attr.Value != null)
                     WriteAttribute(attr.Key, encodingVersion, attr.Value.GetType(), attr.Value, false, writer);
             }
 
@@ -362,7 +362,7 @@ namespace Datamodel.Codecs
                 writer.Indent++;
                 writer.WriteTokenLine("id", "elementid", Guid.NewGuid().ToString());
                 foreach (var attr in dm.PrefixAttributes)
-                    if(attr.Value != null)
+                    if (attr.Value != null)
                     {
                         WriteAttribute(attr.Key, encodingVersion, attr.Value.GetType(), attr.Value, false, writer);
                     }
@@ -374,7 +374,7 @@ namespace Datamodel.Codecs
             if (SupportsReferenceIds)
                 CountReferences(dm.Root);
 
-            if(dm.Root != null)
+            if (dm.Root != null)
             {
                 WriteElement(dm.Root, encodingVersion, writer);
             }
@@ -408,7 +408,7 @@ namespace Datamodel.Codecs
 
             public void HandleElementProp(Element? element, string attrName, Guid id)
             {
-                if(element is null)
+                if (element is null)
                 {
                     throw new InvalidDataException("Trying to handle the propery of an invalid element");
                 }
@@ -483,14 +483,12 @@ namespace Datamodel.Codecs
             }
         }
 
-        Element? Decode_ParseElement(string class_name, ReflectionParams reflectionParams, StreamReader reader, Datamodel dataModel, IntermediateData intermediateData)
+        Element? Decode_ParseElement(IElementFactory elementFactory, string class_name, ReflectionParams reflectionParams, StreamReader reader, Datamodel dataModel, IntermediateData intermediateData)
         {
             string elem_class = class_name ?? Decode_NextToken(reader);
             string elem_name = string.Empty;
             string elem_id = string.Empty;
             Element? elem = null;
-
-            var types = CodecUtilities.GetReflectionTypes(reflectionParams);
 
             string next = Decode_NextToken(reader);
             if (next != "{") throw new CodecException($"Expected Element opener, got '{next}'.");
@@ -509,7 +507,7 @@ namespace Datamodel.Codecs
                     var id = new Guid(elem_id);
                     if (elem_class != "$prefix_element$")
                     {
-                        CodecUtilities.TryConstructCustomElement(types, dataModel, elem_class, elem_name, id, out elem);
+                        CodecUtilities.TryConstructCustomElement(elementFactory, reflectionParams, dataModel, elem_class, elem_name, id, out elem);
                         elem ??= new Element(dataModel, elem_name, id, elem_class);
                     }
 
@@ -538,7 +536,7 @@ namespace Datamodel.Codecs
                 object? attr_value = null;
 
                 if (attr_type == null)
-                    attr_value = Decode_ParseElement(attr_type_s, reflectionParams, reader, dataModel, intermediateData);
+                    attr_value = Decode_ParseElement(elementFactory, attr_type_s, reflectionParams, reader, dataModel, intermediateData);
                 else if (attr_type_s.EndsWith("_array"))
                 {
                     var array = CodecUtilities.MakeList(attr_type, 5); // assume 5 items
@@ -561,19 +559,19 @@ namespace Datamodel.Codecs
                             }
                         }
                         // inline Element
-                        else if (attr_type == typeof(Element)) 
+                        else if (attr_type == typeof(Element))
                         {
-                            array.Add(Decode_ParseElement(next, reflectionParams, reader, dataModel, intermediateData));
+                            array.Add(Decode_ParseElement(elementFactory, next, reflectionParams, reader, dataModel, intermediateData));
                         }
                         // normal value
                         else
                         {
-                            array.Add(Decode_ParseValue(attr_type, next, reflectionParams, reader, dataModel, intermediateData));
+                            array.Add(Decode_ParseValue(elementFactory, attr_type, next, reflectionParams, reader, dataModel, intermediateData));
                         }
                     }
                 }
                 else
-                    attr_value = Decode_ParseValue(attr_type, Decode_NextToken(reader), reflectionParams, reader, dataModel, intermediateData);
+                    attr_value = Decode_ParseValue(elementFactory, attr_type, Decode_NextToken(reader), reflectionParams, reader, dataModel, intermediateData);
 
                 if (elem != null)
                     elem.Add(attr_name, attr_value);
@@ -583,7 +581,7 @@ namespace Datamodel.Codecs
             return elem;
         }
 
-        object? Decode_ParseValue(Type type, string value, ReflectionParams reflectionParams, StreamReader reader, Datamodel dataModel, IntermediateData intermediateData)
+        object? Decode_ParseValue(IElementFactory elementFactory, Type type, string value, ReflectionParams reflectionParams, StreamReader reader, Datamodel dataModel, IntermediateData intermediateData)
         {
             if (type == typeof(string))
                 return value;
@@ -591,7 +589,7 @@ namespace Datamodel.Codecs
             value = value.Trim();
 
             if (type == typeof(Element))
-                return Decode_ParseElement(value, reflectionParams, reader, dataModel, intermediateData);
+                return Decode_ParseElement(elementFactory, value, reflectionParams, reader, dataModel, intermediateData);
             if (type == typeof(int))
                 return int.Parse(value, CultureInfo.InvariantCulture);
             else if (type == typeof(float))
@@ -661,6 +659,9 @@ namespace Datamodel.Codecs
 
         public Datamodel Decode(string encoding, int encoding_version, string format, int format_version, Stream stream, DeferredMode defer_mode, ReflectionParams reflectionParams)
         {
+            var elementFactoryTypes = CodecUtilities.GetIElementFactoryClasses();
+            var elementFactory = (IElementFactory)Activator.CreateInstance(elementFactoryTypes.First());
+
             var dataModel = new Datamodel(format, format_version);
 
             if (encoding == "keyvalues2_noids")
@@ -682,7 +683,7 @@ namespace Datamodel.Codecs
                 { break; }
 
                 try
-                { Decode_ParseElement(next, reflectionParams, reader, dataModel, intermediateData); }
+                { Decode_ParseElement(elementFactory, next, reflectionParams, reader, dataModel, intermediateData); }
                 catch (Exception err)
                 { throw new CodecException($"KeyValues2 decode failed on line {Line}:\n\n{err.Message}", err); }
             }
@@ -700,7 +701,8 @@ namespace Datamodel.Codecs
             {
                 foreach (var id in list.Value)
                 {
-                    list.Key.Add(dataModel.AllElements[id]);
+                    var elemToAdd = dataModel.AllElements[id];
+                    list.Key.Add(elemToAdd);
                 }
             }
 

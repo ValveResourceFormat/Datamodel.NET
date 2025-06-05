@@ -2,7 +2,7 @@
 using System.Numerics;
 using DMElement = Datamodel.Element;
 
-namespace VMAP;
+namespace Tests.VMAP;
 
 #nullable enable
 

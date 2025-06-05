@@ -181,8 +181,8 @@ namespace Datamodel
                         if (elem.Owner == null)
                         {
                             var importedElement = OwnerDatamodel.ImportElement(elem, Datamodel.ImportRecursionMode.Stubs, Datamodel.ImportOverwriteMode.Stubs);
-                            
-                            if(importedElement is not null)
+
+                            if (importedElement is not null)
                             {
                                 Inner[i] = importedElement;
                             }
@@ -201,8 +201,8 @@ namespace Datamodel
                 if (item.Owner == null)
                 {
                     var importedElement = OwnerDatamodel.ImportElement(item, Datamodel.ImportRecursionMode.Recursive, Datamodel.ImportOverwriteMode.Stubs);
-                
-                    if(importedElement is not null)
+
+                    if (importedElement is not null)
                     {
                         item = importedElement;
                     }

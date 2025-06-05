@@ -9,7 +9,7 @@ using Datamodel;
 using System.Numerics;
 using DM = Datamodel.Datamodel;
 using System.Globalization;
-using VMAP;
+using Tests.VMAP;
 
 namespace Datamodel_Tests
 {
@@ -20,7 +20,7 @@ namespace Datamodel_Tests
         protected FileStream Binary_4_File = File.OpenRead(TestContext.CurrentContext.TestDirectory + "/Resources/binary4.dmx");
         protected FileStream KeyValues2_1_File = File.OpenRead(TestContext.CurrentContext.TestDirectory + "/Resources/taunt05.dmx");
 
-        const string GameBin = @"C:/Program Files (x86)/Steam/steamapps/common/Counter-Strike Global Offensive/game/bin/win64";
+        const string GameBin = @"D:/Steam/steamapps/common/Counter-Strike Global Offensive/game/bin/win64";
 
         static readonly string DmxConvertExe = Path.Combine(GameBin, "dmxconvert.exe");
         static readonly bool DmxConvertExe_Exists = File.Exists(DmxConvertExe);
@@ -321,7 +321,7 @@ namespace Datamodel_Tests
             Assert.AreEqual(vertexData.size, 8);
             Assert.AreEqual(vertexData.streams[0]["semanticName"], "position");
 
-            var typedPolygonMeshData = (VMAP.CDmePolygonMeshDataStream)vertexData.streams[0];
+            var typedPolygonMeshData = (CDmePolygonMeshDataStream)vertexData.streams[0];
             Assert.AreEqual(typedPolygonMeshData.semanticName, "position");
 
             var typedPolygonMeshDataStream = typedPolygonMeshData.data as Vector3Array;

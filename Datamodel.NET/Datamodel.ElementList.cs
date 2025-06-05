@@ -219,7 +219,7 @@ namespace Datamodel
                     {
                         foreach (var elem in this.Except(used).ToArray())
                         {
-                            if(elem != null)
+                            if (elem != null)
                             {
                                 store.Remove(elem.ID);
                                 elem.Owner = null;
@@ -241,7 +241,7 @@ namespace Datamodel
 
             protected void WalkElemTree(Element? elem, HashSet<Element?> found)
             {
-                if(elem is null)
+                if (elem is null)
                 {
                     return;
                 }

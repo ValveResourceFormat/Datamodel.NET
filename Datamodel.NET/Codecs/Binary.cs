@@ -5,8 +5,8 @@ using System.Text;
 using System.Numerics;
 using System.IO;
 using System.Diagnostics;
-using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace Datamodel.Codecs
 {
@@ -249,96 +249,116 @@ namespace Datamodel.Codecs
             encoder.Encode();
         }
 
-        float[] ReadVector(int dim, BinaryReader reader)
+        private static readonly Dictionary<RuntimeTypeHandle, int> TypeMap = new Dictionary<RuntimeTypeHandle, int>
         {
-            var output = new float[dim];
-            foreach (int i in Enumerable.Range(0, dim))
-                output[i] = reader.ReadSingle();
-            return output;
+            { typeof(Element).TypeHandle, 0 },
+            { typeof(int).TypeHandle, 1 },
+            { typeof(float).TypeHandle, 2 },
+            { typeof(bool).TypeHandle, 3 },
+            { typeof(string).TypeHandle, 4 },
+            { typeof(byte[]).TypeHandle, 5 },
+            { typeof(TimeSpan).TypeHandle, 6 },
+            { typeof(Color).TypeHandle, 7 },
+            { typeof(Vector2).TypeHandle, 8 },
+            { typeof(Vector3).TypeHandle, 9 },
+            { typeof(QAngle).TypeHandle, 10 },
+            { typeof(Vector4).TypeHandle, 11 },
+            { typeof(Quaternion).TypeHandle, 12 },
+            { typeof(Matrix4x4).TypeHandle, 13 },
+            { typeof(byte).TypeHandle, 14 },
+            { typeof(UInt64).TypeHandle, 15 }
+        };
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        object? ReadValue(Datamodel dm, int typeIndex, bool raw_string, BinaryReader reader)
+        {
+            return typeIndex switch
+            {
+                0 => ReadElement(dm, reader),
+                1 => reader.ReadInt32(),
+                2 => reader.ReadSingle(),
+                3 => reader.ReadBoolean(),
+                4 => raw_string ? ReadString_Raw(reader) : StringDict!.ReadString(reader),
+                5 => reader.ReadBytes(reader.ReadInt32()),
+                6 => TimeSpan.FromTicks(reader.ReadInt32() * (TimeSpan.TicksPerSecond / DatamodelTicksPerSecond)),
+                7 => ReadColor(reader),
+                8 => ReadVector2(reader),
+                9 => ReadVector3(reader),
+                10 => ReadQAngle(reader),
+                11 => ReadVector4(reader),
+                12 => ReadQuaternion(reader),
+                13 => ReadMatrix4x4(reader),
+                14 => reader.ReadByte(),
+                15 => reader.ReadUInt64(),
+                _ => throw new ArgumentException("Cannot read value of type")
+            };
         }
 
-        object? ReadValue(Datamodel dm, Type? type, bool raw_string, BinaryReader reader)
+        // Specialized methods to avoid repeated vector allocations
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private object? ReadElement(Datamodel dm, BinaryReader reader)
         {
-            if (type == typeof(Element))
+            var index = reader.ReadInt32();
+            return index switch
             {
-                var index = reader.ReadInt32();
-                if (index == -1)
-                    return null;
-                else if (index == -2)
-                {
-                    var id = new Guid(ReadString_Raw(reader)); // yes, it's in ASCII!
-                    return dm.AllElements[id] ?? new Element(dm, id);
-                }
-                else
-                    return dm.AllElements[index];
-            }
-            if (type == typeof(int))
-                return reader.ReadInt32();
-            if (type == typeof(float))
-                return reader.ReadSingle();
-            if (type == typeof(bool))
-                return reader.ReadBoolean();
-            if (type == typeof(string))
-                return raw_string ? ReadString_Raw(reader) : StringDict!.ReadString(reader);
+                -1 => null,
+                -2 => dm.AllElements[new Guid(StringDict.ReadString(reader))] ?? new Element(dm, new Guid(StringDict.ReadString(reader))),
+                _ => dm.AllElements[index]
+            };
+        }
 
-            if (type == typeof(byte[]))
-                return reader.ReadBytes(reader.ReadInt32());
-            if (type == typeof(TimeSpan))
-                return TimeSpan.FromTicks(reader.ReadInt32() * (TimeSpan.TicksPerSecond / DatamodelTicksPerSecond));
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Color ReadColor(BinaryReader reader)
+        {
+            var rgba = reader.ReadBytes(4);
+            return Color.FromBytes(rgba);
+        }
 
-            if (type == typeof(Color))
-            {
-                var rgba = reader.ReadBytes(4);
-                return Color.FromBytes(rgba);
-            }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Vector2 ReadVector2(BinaryReader reader)
+        {
+            return new Vector2(reader.ReadSingle(), reader.ReadSingle());
+        }
 
-            if (type == typeof(Vector2))
-            {
-                var ords = ReadVector(2, reader);
-                return new Vector2(ords[0], ords[1]);
-            }
-            if (type == typeof(Vector3))
-            {
-                var ords = ReadVector(3, reader);
-                return new Vector3(ords[0], ords[1], ords[2]);
-            }
-            if (type == typeof(QAngle))
-            {
-                var ords = ReadVector(3, reader);
-                return new QAngle(ords[0], ords[1], ords[2]);
-            }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Vector3 ReadVector3(BinaryReader reader)
+        {
+            return new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+        }
 
-            if (type == typeof(Vector4))
-            {
-                var ords = ReadVector(4, reader);
-                return new Vector4(ords[0], ords[1], ords[2], ords[3]);
-            }
-            if (type == typeof(Quaternion))
-            {
-                var ords = ReadVector(4, reader);
-                return new Quaternion(ords[0], ords[1], ords[2], ords[3]);
-            }
-            if (type == typeof(Matrix4x4))
-            {
-                var ords = ReadVector(4 * 4, reader);
-                return new Matrix4x4(
-                    ords[0], ords[1], ords[2], ords[3],
-                    ords[4], ords[5], ords[6], ords[7],
-                    ords[8], ords[9], ords[10], ords[11],
-                    ords[12], ords[13], ords[14], ords[15]);
-            }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static QAngle ReadQAngle(BinaryReader reader)
+        {
+            return new QAngle(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+        }
 
-            if (type == typeof(byte))
-                return reader.ReadByte();
-            if (type == typeof(UInt64))
-                return reader.ReadUInt64();
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Vector4 ReadVector4(BinaryReader reader)
+        {
+            return new Vector4(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+        }
 
-            throw new ArgumentException(type == null ? "No type provided to GetValue()" : "Cannot read value of type " + type.Name);
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Quaternion ReadQuaternion(BinaryReader reader)
+        {
+            return new Quaternion(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Matrix4x4 ReadMatrix4x4(BinaryReader reader)
+        {
+            // Read all 16 floats directly without intermediate array
+            return new Matrix4x4(
+                reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(),
+                reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(),
+                reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(),
+                reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
         }
 
         public Datamodel Decode(string encoding, int encoding_version, string format, int format_version, Stream stream, DeferredMode defer_mode, ReflectionParams reflectionParams)
         {
-            var types = CodecUtilities.GetReflectionTypes(reflectionParams);
+            var elementFactoryTypes = CodecUtilities.GetIElementFactoryClasses();
+            var elementFactory = (IElementFactory)Activator.CreateInstance(elementFactoryTypes.First());
 
             stream.Seek(0, SeekOrigin.Begin);
             while (true)
@@ -349,7 +369,8 @@ namespace Datamodel.Codecs
             var dm = new Datamodel(format, format_version);
 
             EncodingVersion = encoding_version;
-            Reader = new BinaryReader(stream, Datamodel.TextEncoding);
+
+            Reader = new BinaryReader(stream);
 
             if (EncodingVersion >= 9)
             {
@@ -377,12 +398,13 @@ namespace Datamodel.Codecs
                 var id_bits = Reader.ReadBytes(16);
                 var id = new Guid(BitConverter.IsLittleEndian ? id_bits : id_bits.Reverse().ToArray());
 
-                if (!CodecUtilities.TryConstructCustomElement(types, dm, type, name, id, out _))
+                if (!CodecUtilities.TryConstructCustomElement(elementFactory, reflectionParams, dm, type, name, id, out _))
                 {
                     // note: constructing an element, adds it to the datamodel.AllElements
                     _ = new Element(dm, name, id, type);
                 }
             }
+
 
             // read attributes (or not, if we're deferred)
             foreach (var elem in dm.AllElements.ToArray())
@@ -414,12 +436,12 @@ namespace Datamodel.Codecs
 
         public object? DeferredDecodeAttribute(Datamodel dm, long offset)
         {
-            if(Reader is null)
+            if (Reader is null)
             {
                 throw new InvalidDataException("Tried to read a deferred attribute but the reader is invalid");
             }
 
-            Reader.BaseStream.Seek(offset, SeekOrigin.Begin);
+            Reader.BaseStream.Seek((int)offset, SeekOrigin.Begin);
             return DecodeAttribute(dm, false, Reader);
         }
 
@@ -428,15 +450,16 @@ namespace Datamodel.Codecs
             var types = IdToType(reader.ReadByte());
 
             if (types.Item2 == null)
-                return ReadValue(dm, types.Item1, EncodingVersion < 4 || prefix, reader);
+                return ReadValue(dm, TypeMap[types.Item1.TypeHandle], EncodingVersion < 4 || prefix, reader);
             else
             {
                 var count = reader.ReadInt32();
                 var inner_type = types.Item2;
                 var array = CodecUtilities.MakeList(inner_type, count);
 
+                var typeId = TypeMap[inner_type.TypeHandle];
                 foreach (var x in Enumerable.Range(0, count))
-                    array.Add(ReadValue(dm, inner_type, true, reader));
+                    array.Add(ReadValue(dm, typeId, true, reader));
 
                 return array;
             }
@@ -449,7 +472,7 @@ namespace Datamodel.Codecs
             int count = 1;
             Type? type = types.Item1;
 
-            if(type is null)
+            if (type is null)
             {
                 throw new InvalidDataException("Failed to match id to type");
             }
@@ -554,7 +577,7 @@ namespace Datamodel.Codecs
 
             int CountChildren(Element? elem, HashSet<Element> counter)
             {
-                if(elem is null)
+                if (elem is null)
                 {
                     return 0;
                 }

@@ -5,6 +5,7 @@ using System.Numerics;
 using System.Reflection;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Data;
 
 namespace Datamodel.Codecs
 {
@@ -45,8 +46,9 @@ namespace Datamodel.Codecs
     public class ReflectionParams(bool attemptReflection = true, List<Type>? additionalTypes = null, List<Assembly>? assembliesToSearch = null)
     {
         public bool AttemptReflection = attemptReflection;
-        public List<Type> AdditionalTypes = additionalTypes ??= [];
-        public List<Assembly> AssembliesToSearch = assembliesToSearch ??= [];
+
+        public string Assembly = string.Empty;
+        public string Namespace = string.Empty;
     }
 
 
@@ -189,81 +191,40 @@ namespace Datamodel.Codecs
             elem.Add(key, offset);
         }
 
-        public static Dictionary<string, Type> GetReflectionTypes(ReflectionParams reflectionParams)
+        public static bool TryConstructCustomElement(IElementFactory elementFactory, ReflectionParams reflectionParams, Datamodel dataModel, string elem_class, string elem_name, Guid elem_id, out Element? elem)
         {
-            Dictionary<string, Type> types = [];
+            elem = (Element?)elementFactory.GetClass(reflectionParams.Assembly, reflectionParams.Namespace, elem_class);
 
-            if (reflectionParams.AttemptReflection)
+            if (elem is null)
             {
-                foreach (var assembly in reflectionParams.AssembliesToSearch)
-                {
-                    foreach (var classType in assembly.DefinedTypes)
-                    {
-                        if (classType.IsSubclassOf(typeof(Element)))
-                        {
-                            types.TryAdd(classType.Name, classType);
-                        }
-                    }
-                }
-
-                foreach (var type in reflectionParams.AdditionalTypes)
-                {
-                    if (type.IsSubclassOf(typeof(Element)))
-                    {
-                        types.TryAdd(type.Name, type);
-                    }
-                }
-            }
-
-            return types;
-        }
-
-        public static bool TryConstructCustomElement(Dictionary<string, Type> types, Datamodel dataModel, string elem_class, string elem_name, Guid elem_id, out Element? elem)
-        {
-            var matchedType = types.TryGetValue(elem_class, out var classType);
-
-            if (!matchedType || classType is null)
-            {
-                elem = null;
                 return false;
             }
 
-            Type derivedType = classType;
+            elem.ID = elem_id;
+            elem.Owner = dataModel;
+            elem.Name = elem_name;
+            elem.ClassName = elem_class;
 
-            ConstructorInfo? elementConstructor = typeof(Element).GetConstructor(
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null,
-                [typeof(Datamodel), typeof(string), typeof(Guid), typeof(string)],
-                null
-            );
-
-            var customClassInitializer = derivedType.GetConstructor(
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null,
-                [],
-                null
-            );
-
-            if (elementConstructor == null)
-            {
-                throw new InvalidOperationException("Failed to get constructor while attemption reflection based deserialisation");
-            }
-
-            if (customClassInitializer == null)
-            {
-                throw new InvalidOperationException("Failed to get custom element constructor.");
-            }
-
-            object uninitializedObject = RuntimeHelpers.GetUninitializedObject(derivedType);
-
-            // this will initialize values such as
-            // public Datamodel.ElementArray Children { get; } = [];
-            customClassInitializer.Invoke(uninitializedObject, []);
-
-            elementConstructor.Invoke(uninitializedObject, [dataModel, elem_name, elem_id, elem_class]);
-
-            elem = (Element?)uninitializedObject;
             return true;
+        }
+
+        public static IEnumerable<Type?> GetIElementFactoryClasses()
+        {
+            return AppDomain.CurrentDomain.GetAssemblies()
+                .SelectMany(assembly =>
+                {
+                    try
+                    {
+                        return assembly.GetTypes();
+                    }
+                    catch (ReflectionTypeLoadException ex)
+                    {
+                        return ex.Types.Where(t => t != null);
+                    }
+                })
+                .Where(type => type.IsClass &&
+                      !type.IsAbstract &&
+                      type.GetInterfaces().Contains(typeof(IElementFactory)));
         }
     }
 
@@ -295,5 +256,10 @@ namespace Datamodel.Codecs
 
         public string Name { get; private set; }
         public int[] Versions { get; private set; }
+    }
+
+    public interface IElementFactory
+    {
+        public object? GetClass(string assembly, string nameSpace, string classname);
     }
 }

@@ -29,7 +29,7 @@ namespace Datamodel
             var result = new List<Attribute>();
             foreach (DictionaryEntry entry in PropertyInfos)
             {
-                if(entry.Value is null)
+                if (entry.Value is null)
                 {
                     throw new InvalidDataException("Property value can not be null");
                 }
@@ -135,7 +135,7 @@ namespace Datamodel
         {
             var attrib = Inner[key];
 
-            if(attrib is null)
+            if (attrib is null)
             {
                 return null;
             }
@@ -269,7 +269,7 @@ namespace Datamodel
                     {
                         // were actually fine with this being null, it will just set the value to null
                         // but need to check so the type check doesn't fail if it is null
-                        if(value != null)
+                        if (value != null)
                         {
                             var valueType = value.GetType();
 
@@ -307,7 +307,7 @@ namespace Datamodel
 
                     return;
                 }
-                
+
                 Attribute? old_attr;
                 Attribute? new_attr;
                 int old_index = -1;
@@ -343,7 +343,7 @@ namespace Datamodel
             {
                 var attr = (Attribute?)Inner[index];
 
-                if(attr is null)
+                if (attr is null)
                 {
                     throw new InvalidOperationException($"attribute at index {index} doesn't exist");
                 }
@@ -367,7 +367,7 @@ namespace Datamodel
             {
                 attr = (Attribute?)Inner[index];
 
-                if(attr is not null)
+                if (attr is not null)
                 {
                     attr.Owner = null;
                     Inner.RemoveAt(index);
@@ -571,7 +571,7 @@ namespace Datamodel
 
         public new bool Equals(object? x, object? y)
         {
-            if(x is null || y is null)
+            if (x is null || y is null)
             {
                 return false;
             }
