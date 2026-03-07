@@ -8,21 +8,21 @@ dotnet add package KeyValues2
 ```
 
 ```cs
-using var Datamodel;
+using Datamodel;
 
 // Load a file with unknown layout
-var dm = Datamodel.Load("my_file.dmx");
+using var dm = Datamodel.Load("my_file.dmx");
 var element = dm.Root;
 var value = element.Get<string>("my_property");
 
 // Load a file with a known layout
-var map = Datamodel.Load<CMapRootElement>("fy_pool.vmap");
+using var map = Datamodel.Load<CMapRootElement>("fy_pool.vmap");
 var root = (CMapRootElement)map.Root;
 Debug.Assert(root.IsPrefab == false);
 
 // Layout definition
 // Full implementation can be found here:
-/// https://github.com/ValveResourceFormat/Datamodel.NET/blob/master/Tests/ValveMap.cs
+// https://github.com/ValveResourceFormat/Datamodel.NET/blob/master/Tests/ValveMap.cs
 [LowercaseProperties]
 class CMapRootElement : Element
 {
@@ -60,9 +60,9 @@ HelloWorld.Save("hello world.dmx", "keyvalues2", 1); // must provide an encoding
 }
 ```
 
-## Datamodel Attributes
+## Attributes
 
-The following CLR types are supported as Datamodel attributes:
+The following .NET types are supported as Datamodel attributes:
 
 * `int`
 * `float`
@@ -70,16 +70,17 @@ The following CLR types are supported as Datamodel attributes:
 * `string`
 * `byte`
 * `byte[]`
+* `Vector2`
+* `Vector3`
+* `Vector4` / `Quaternion`
+* `Matrix4x4`
 * `ulong`
 * `System.TimeSpan`
 
 Additionally, the following Datamodel.NET types are supported:
 
 * `Element` (a named collection of attributes)
-* `Vector2`
-* `Vector3` / `QAngle`
-* `Vector4` / `Quaternion`
-* `Matrix` (4x4)
+* `QAngle`
 
 `IList<T>` collections of the above types are also supported. (This can be a bit confusing given that both `byte` and `byte[]` are valid attribute types; use the `ByteArray` type if you run into trouble.)
 
