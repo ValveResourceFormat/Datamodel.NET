@@ -217,7 +217,8 @@ namespace Datamodel
                     ChangeLock.EnterWriteLock();
                     try
                     {
-                        foreach (var elem in this.Except(used).ToArray())
+                        var removed = this.Except(used).ToArray();
+                        foreach (var elem in removed)
                         {
                             if (elem != null)
                             {
@@ -226,7 +227,7 @@ namespace Datamodel
                             }
                         }
 
-                        CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, (System.Collections.IList)used));
+                        CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, removed));
                     }
                     finally
                     {
