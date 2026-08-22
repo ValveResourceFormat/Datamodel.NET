@@ -4,7 +4,6 @@ using System.Linq;
 using System.Text;
 using System.Numerics;
 using System.IO;
-using System.Runtime.CompilerServices;
 using System.Globalization;
 using System.Reflection;
 using System.Xml.Linq;
@@ -286,13 +285,11 @@ namespace Datamodel.Codecs
                 else if (type == typeof(Matrix4x4))
                 {
                     var castValue = (Matrix4x4)value;
-                    var matrixString =
-                        $"{castValue.M11} {castValue.M12} {castValue.M13} {castValue.M14}" +
-                        $" {castValue.M21} {castValue.M22} {castValue.M23} {castValue.M24}" +
-                        $" {castValue.M31} {castValue.M32} {castValue.M33} {castValue.M34}" +
-                        $" {castValue.M41} {castValue.M42} {castValue.M43} {castValue.M44}";
-
-                    value = FormattableString.Invariant(FormattableStringFactory.Create(matrixString));
+                    value =
+                        FormattableString.Invariant($"{castValue.M11} {castValue.M12} {castValue.M13} {castValue.M14}") +
+                        FormattableString.Invariant($" {castValue.M21} {castValue.M22} {castValue.M23} {castValue.M24}") +
+                        FormattableString.Invariant($" {castValue.M31} {castValue.M32} {castValue.M33} {castValue.M34}") +
+                        FormattableString.Invariant($" {castValue.M41} {castValue.M42} {castValue.M43} {castValue.M44}");
                 }
                 else if (value is QAngle castValue)
                 {
