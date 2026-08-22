@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -299,12 +299,17 @@ namespace Datamodel.Codecs
         private object? ReadElement(Datamodel dm, BinaryReader reader)
         {
             var index = reader.ReadInt32();
-            return index switch
+
+            if (index == -1)
+                return null;
+
+            if (index == -2)
             {
-                -1 => null,
-                -2 => dm.AllElements[new Guid(StringDict.ReadString(reader))] ?? new Element(dm, new Guid(StringDict.ReadString(reader))),
-                _ => dm.AllElements[index]
-            };
+                var id = new Guid(ReadString_Raw(reader));
+                return dm.AllElements[id] ?? new Element(dm, id);
+            }
+
+            return dm.AllElements[index];
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
