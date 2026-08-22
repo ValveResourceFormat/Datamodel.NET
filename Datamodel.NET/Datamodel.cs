@@ -292,7 +292,7 @@ namespace Datamodel
             }
             finally
             {
-                if (defer_mode == DeferredMode.Disabled || (dm != null && dm.Codec == null)) stream.Dispose();
+                if (dm == null || defer_mode == DeferredMode.Disabled || dm.Codec == null) stream.Dispose();
             }
         }
         /// <summary>
