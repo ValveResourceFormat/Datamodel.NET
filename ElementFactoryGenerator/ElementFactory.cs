@@ -26,6 +26,7 @@ public class ElementFactoryGenerator : IIncrementalGenerator
     private void Execute(SourceProductionContext context, (Compilation Left, ImmutableArray<ClassDeclarationSyntax> Right) tuple)
     {
         StringBuilder elementFactory = new();
+        var assemblyCases = new StringBuilder();
 
         var assemblies = new List<FactoryAssembly>();
 
@@ -37,14 +38,12 @@ public class ElementFactoryGenerator : IIncrementalGenerator
             {
                 public object? GetClass(string assembly, string nameSpace, string classname)
                 {
-                    switch (assembly)
-                    {
 
             """");
 
         var (compilation, classDeclList) = tuple;
 
-        var runningAssembly = new FactoryAssembly(compilation.AssemblyName);
+        var runningAssembly = new FactoryAssembly(compilation.AssemblyName ?? string.Empty);
         foreach (var classDecl in classDeclList)
         {
             var type = compilation.GetSemanticModel(classDecl.SyntaxTree).GetDeclaredSymbol(classDecl);
@@ -139,7 +138,7 @@ public class ElementFactoryGenerator : IIncrementalGenerator
 
             if (validNamespaces > 0)
             {
-                elementFactory.AppendLine(
+                assemblyCases.AppendLine(
                 $"""
                              case "{assembly.Name}" :
                                 {namespaceStringBuilder.ToString()}
@@ -150,10 +149,24 @@ public class ElementFactoryGenerator : IIncrementalGenerator
 
         }
 
+        if (assemblyCases.Length > 0)
+        {
+            elementFactory.AppendLine(
+                """"
+                        switch (assembly)
+                        {
+                """");
+
+            elementFactory.Append(assemblyCases.ToString());
+
+            elementFactory.AppendLine(
+                """"
+                        }
+                """");
+        }
+
         elementFactory.AppendLine(
             """"
-                    }
-
                     return null;
                 }
 

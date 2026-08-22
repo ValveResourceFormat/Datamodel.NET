@@ -18,7 +18,7 @@ public abstract class AttributeNamingConventionAttribute : System.Attribute
 public class LowercasePropertiesAttribute : AttributeNamingConventionAttribute
 {
     public override string GetAttributeName(string propertyName, Type _)
-        => propertyName.ToLower();
+        => propertyName.ToLowerInvariant();
 }
 
 /// <summary>
