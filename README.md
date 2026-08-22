@@ -84,3 +84,11 @@ Additionally, the following Datamodel.NET types are supported:
 
 `IList<T>` collections of the above types are also supported. (This can be a bit confusing given that both `byte` and `byte[]` are valid attribute types; use the `ByteArray` type if you run into trouble.)
 
+
+## License
+
+Datamodel.NET is licensed under the [MIT License](LICENSE).
+
+The sample `.dmx` and `.vmap` files under [`Tests/Resources`](Tests/Resources) are derived from Valve
+Corporation game content and are included solely as test fixtures. They are **not** covered by the MIT
+license above and remain the property of Valve Corporation. They are not distributed in the NuGet package.

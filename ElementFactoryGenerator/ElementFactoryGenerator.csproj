@@ -3,12 +3,17 @@
 	<PropertyGroup>
 		<TargetFramework>netstandard2.0</TargetFramework>
 		<LangVersion>latest</LangVersion>
-		<Version>0.1</Version>
+		<Version>0.2</Version>
 		<Nullable>enable</Nullable>
 		<IncludeSymbols>true</IncludeSymbols>
 		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
 		<IsRoslynComponent>true</IsRoslynComponent>
 		<PackageId>KeyValues2.ElementFactoryGenerator</PackageId>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<Authors>Tom Edwards, ValveResourceFormat contributors</Authors>
+		<Copyright>Copyright (c) 2013 Tom Edwards and ValveResourceFormat contributors</Copyright>
+		<Description>Source generator for reflection-based Element deserialisation in Datamodel.NET (KeyValues2).</Description>
+		<PackageProjectUrl>https://github.com/ValveResourceFormat/Datamodel.NET</PackageProjectUrl>
 	</PropertyGroup>
 
 	<ItemGroup>

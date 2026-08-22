@@ -8,7 +8,7 @@ using System.Security;
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
 [assembly: AssemblyProduct("")]
-[assembly: AssemblyCopyright("Copyright © Tom Edwards 2014")]
+[assembly: AssemblyCopyright("Copyright © 2013 Tom Edwards and ValveResourceFormat contributors")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 

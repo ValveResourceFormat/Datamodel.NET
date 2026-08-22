@@ -6,8 +6,13 @@
     <PackageId>KeyValues2</PackageId>
     <Version>0.9-beta</Version>
 	<Nullable>enable</Nullable>
-    <PackageLicenseFile>COPYING</PackageLicenseFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Authors>Tom Edwards, ValveResourceFormat contributors</Authors>
+    <Copyright>Copyright (c) 2013 Tom Edwards and ValveResourceFormat contributors</Copyright>
+    <Description>Implements Valve's Datamodel Exchange (DMX) file format.</Description>
+    <PackageProjectUrl>https://github.com/ValveResourceFormat/Datamodel.NET</PackageProjectUrl>
+    <PackageTags>valve;dmx;datamodel;keyvalues2;source-engine;vmap</PackageTags>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
@@ -34,8 +39,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="README.md" Pack="true" PackagePath="\" />
-    <None Include="COPYING" Pack="true" PackagePath="\" />
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="DmxPad\**" />
@@ -53,7 +57,7 @@
   </ItemGroup>
 
   <ItemGroup>
-  	<ProjectReference Include="..\ElementFactoryGenerator\ElementFactoryGenerator.csproj" Version="0.1" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
+  	<ProjectReference Include="..\ElementFactoryGenerator\ElementFactoryGenerator.csproj" Version="0.2" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
   </ItemGroup>
 	
 </Project>
