@@ -9,6 +9,15 @@ using System.Text;
 [Generator]
 public class ElementFactoryGenerator : IIncrementalGenerator
 {
+    private static readonly DiagnosticDescriptor AmbiguousElementClassName = new(
+        id: "DMX001",
+        title: "Ambiguous Datamodel element class name",
+        messageFormat: "Element class name '{0}' is declared more than once in namespace '{1}'; '{2}' will be used for deserialisation and '{3}' will be ignored",
+        category: "Datamodel",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Datamodel files identify elements by their simple class name, so two Element subclasses sharing a name in the same namespace cannot be told apart when deserialising.");
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var provider = context.SyntaxProvider.CreateSyntaxProvider(
@@ -96,10 +105,27 @@ public class ElementFactoryGenerator : IIncrementalGenerator
                                         {
                 """");
                 var validTypes = 0;
+                var emittedTypeNames = new Dictionary<string, INamedTypeSymbol>();
                 foreach (var type in nameSpace.Types)
                 {
                     if (ValidateType(type, compilation))
                     {
+                        // Datamodel files record only the simple class name, so a duplicate is
+                        // unresolvable: emit the first and tell the user the rest are unreachable.
+                        if (emittedTypeNames.TryGetValue(type.Name, out var existingType))
+                        {
+                            context.ReportDiagnostic(Diagnostic.Create(
+                                AmbiguousElementClassName,
+                                type.Locations.FirstOrDefault() ?? Location.None,
+                                type.Name,
+                                nameSpace.Name,
+                                existingType.ToDisplayString(),
+                                type.ToDisplayString()));
+
+                            continue;
+                        }
+
+                        emittedTypeNames.Add(type.Name, type);
                         validTypes++;
 
                         typeseStringBuilder.AppendLine(
