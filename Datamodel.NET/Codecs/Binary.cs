@@ -446,7 +446,7 @@ namespace Datamodel.Codecs
                 throw new InvalidDataException("Tried to read a deferred attribute but the reader is invalid");
             }
 
-            Reader.BaseStream.Seek((int)offset, SeekOrigin.Begin);
+            Reader.BaseStream.Seek(offset, SeekOrigin.Begin);
             return DecodeAttribute(dm, false, Reader);
         }
 
