@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+*"
+      - "v[0-9]+.[0-9]+*"
+
+jobs:
+  publish:
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 9.0.x
+    - name: Test
+      run: dotnet test -c Release
+    # KeyValues2 depends on KeyValues2.ElementFactoryGenerator
+    - name: Pack
+      run: |
+        dotnet pack ElementFactoryGenerator/ElementFactoryGenerator.csproj -c Release -o out
+        dotnet pack Datamodel.NET/Datamodel.NET.csproj -c Release -o out
+    # Kept next to the push: the issued key is only valid for an hour.
+    - name: NuGet login
+      uses: NuGet/login@v1
+      id: login
+      with:
+        user: ${{ secrets.NUGET_USER }}
+    - name: Push
+      run: dotnet nuget push "out/*.nupkg" --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
