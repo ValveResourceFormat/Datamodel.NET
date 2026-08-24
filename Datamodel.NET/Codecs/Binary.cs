@@ -154,9 +154,10 @@ namespace Datamodel.Codecs
             /// <summary>
             /// Constructs a new <see cref="StringDictionary"/> from a <see cref="Datamodel"/> object.
             /// </summary>
-            public StringDictionary(int encoding_version, BinaryWriter writer, Datamodel dm)
+            public StringDictionary(int encoding_version, BinaryWriter writer, Datamodel dm, SerializationContext context)
             {
                 EncodingVersion = encoding_version;
+                Context = context;
 
                 Dummy = EncodingVersion == 1;
                 if (!Dummy)
@@ -169,6 +170,7 @@ namespace Datamodel.Codecs
             }
 
             private readonly HashSet<Element> Scraped = [];
+            private readonly SerializationContext? Context;
 
             void ScrapeElement(Element? elem)
             {
@@ -177,7 +179,7 @@ namespace Datamodel.Codecs
 
                 AddString(elem.Name);
                 AddString(elem.ClassName);
-                foreach (var attr in elem.GetAllAttributesForSerialization())
+                foreach (var attr in Context!.Attributes[elem])
                 {
                     AddString(attr.Key);
                     switch (attr.Value)
@@ -555,6 +557,7 @@ namespace Datamodel.Codecs
             readonly BinaryWriter Writer;
             readonly StringDictionary StringDict;
             readonly Datamodel Datamodel;
+            readonly SerializationContext Context;
 
             readonly int EncodingVersion;
 
@@ -564,7 +567,8 @@ namespace Datamodel.Codecs
                 Writer = writer;
                 Datamodel = dm;
 
-                StringDict = new StringDictionary(version, writer, dm);
+                Context = new SerializationContext();
+                StringDict = new StringDictionary(version, writer, dm, Context);
                 ElementIndices = [];
                 ElementOrder = [];
 
@@ -601,7 +605,7 @@ namespace Datamodel.Codecs
                 if (elem.Stub) return 0;
                 int num_elems = 1;
                 counter.Add(elem);
-                foreach (var attr in elem.GetAllAttributesForSerialization())
+                foreach (var attr in Context.Attributes[elem])
                 {
                     if (attr.Value == null) continue;
 
@@ -631,7 +635,7 @@ namespace Datamodel.Codecs
                 else Writer.Write(elem.Name);
                 Writer.Write(elem.ID.ToByteArray());
 
-                foreach (var attr in elem.GetAllAttributesForSerialization())
+                foreach (var attr in Context.Attributes[elem])
                 {
                     var child_elem = attr.Value as Element;
                     if (child_elem != null)
@@ -654,7 +658,7 @@ namespace Datamodel.Codecs
 
             void WriteBody(Element elem)
             {
-                var attributesIterated = elem.GetAllAttributesForSerialization().ToArray();
+                var attributesIterated = Context.Attributes[elem];
                 //Writer.Write(elem.Count);
                 Writer.Write(attributesIterated.Length);
                 foreach (var attr in attributesIterated)

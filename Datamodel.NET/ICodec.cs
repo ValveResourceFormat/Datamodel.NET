@@ -228,6 +228,49 @@ namespace Datamodel.Codecs
         }
     }
 
+    /// <summary>
+    /// Caches that live for the duration of one encode.
+    /// </summary>
+    class SerializationContext
+    {
+        public ElementAttributeCache Attributes { get; } = new();
+
+        readonly List<string> Indentation = ["\n"];
+
+        /// <summary>
+        /// A newline followed by <paramref name="level"/> levels of indentation.
+        /// </summary>
+        public string GetIndentation(int level)
+        {
+            while (Indentation.Count <= level)
+                Indentation.Add(Indentation[^1] + "    ");
+
+            return Indentation[level];
+        }
+    }
+
+    /// <summary>
+    /// Builds each Element's attribute list once per encode, instead of once per pass over the Element.
+    /// </summary>
+    class ElementAttributeCache
+    {
+        readonly Dictionary<Element, KeyValuePair<string, object?>[]> Cache = [];
+
+        public KeyValuePair<string, object?>[] this[Element element]
+        {
+            get
+            {
+                if (!Cache.TryGetValue(element, out var attributes))
+                {
+                    attributes = [.. element.GetAllAttributesForSerialization()];
+                    Cache[element] = attributes;
+                }
+
+                return attributes;
+            }
+        }
+    }
+
     [AttributeUsage(AttributeTargets.Class, Inherited = true, AllowMultiple = true)]
     public sealed class CodecFormatAttribute : System.Attribute
     {

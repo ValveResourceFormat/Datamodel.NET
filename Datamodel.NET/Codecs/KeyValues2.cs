@@ -57,16 +57,18 @@ namespace Datamodel.Codecs
                 set
                 {
                     indent_count = value;
-                    indent_string = "\n" + string.Concat(Enumerable.Repeat("    ", value));
+                    indent_string = Context.GetIndentation(value);
                 }
             }
             int indent_count = 0;
             string indent_string = "\n";
             readonly TextWriter Output;
+            readonly SerializationContext Context;
 
-            public KV2Writer(Stream output)
+            public KV2Writer(Stream output, SerializationContext context)
             {
                 Output = new StreamWriter(output, Datamodel.TextEncoding);
+                Context = context;
             }
 
             public void Dispose()
@@ -131,6 +133,7 @@ namespace Datamodel.Codecs
         // Multi-referenced elements are written out as a separate block at the end of the file.
         // In-line only the id is written.
         Dictionary<Element, int> ReferenceCount = [];
+        SerializationContext Context = new();
 
         bool SupportsReferenceIds;
 
@@ -146,7 +149,7 @@ namespace Datamodel.Codecs
             else
             {
                 ReferenceCount[elem] = 1;
-                foreach (var attr in elem.GetAllAttributesForSerialization())
+                foreach (var attr in Context.Attributes[elem])
                 {
                     if (attr.Value == null)
                         continue;
@@ -331,7 +334,7 @@ namespace Datamodel.Codecs
                 writer.WriteTokenLine("name", "string", element.Name);
             }
 
-            foreach (var attr in element.GetAllAttributesForSerialization())
+            foreach (var attr in Context.Attributes[element])
             {
                 if (attr.Value != null)
                     WriteAttribute(attr.Key, encodingVersion, attr.Value.GetType(), attr.Value, false, writer);
@@ -343,7 +346,8 @@ namespace Datamodel.Codecs
 
         public void Encode(Datamodel dm, string encoding, int encodingVersion, Stream stream)
         {
-            var writer = new KV2Writer(stream);
+            Context = new SerializationContext();
+            var writer = new KV2Writer(stream, Context);
 
             SupportsReferenceIds = encoding != "keyvalues2_noids";
 
