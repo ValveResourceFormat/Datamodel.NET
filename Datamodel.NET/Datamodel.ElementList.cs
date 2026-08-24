@@ -129,9 +129,10 @@ namespace Datamodel
                 }
             }
 
+            /// <summary>Determines whether the given <see cref="Element"/> is registered in this collection.</summary>
             internal bool Contains(Element elem)
             {
-                return store.Contains(elem);
+                return this[elem.ID] == elem;
             }
 
             /// <summary>
