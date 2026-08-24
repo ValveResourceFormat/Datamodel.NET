@@ -91,6 +91,11 @@ namespace Datamodel
         /// <summary>
         /// Gets the ID of this Element. This must be unique within the Element's <see cref="Datamodel"/>.
         /// </summary>
+        /// <remarks>
+        /// An Element's ID is its identity: it decides both <see cref="Equals(Element)"/> and
+        /// <see cref="GetHashCode"/>. Assign it before the Element joins a <see cref="Datamodel"/> or any other
+        /// hash-based collection, because changing it afterwards strands the Element in its old bucket.
+        /// </remarks>
         public Guid ID { get; set; }
 
         /// <summary>
@@ -382,9 +387,28 @@ namespace Datamodel
             return base.ContainsKey(key);
         }
 
+        /// <summary>
+        /// Determines whether this Element has the same <see cref="ID"/> as another.
+        /// </summary>
         public bool Equals(Element? other)
         {
             return other != null && ID == other.ID;
+        }
+
+        /// <summary>
+        /// Determines whether the given object is an <see cref="Element"/> with the same <see cref="ID"/> as this one.
+        /// </summary>
+        public override bool Equals(object? obj)
+        {
+            return Equals(obj as Element);
+        }
+
+        /// <summary>
+        /// Returns a hash code derived from <see cref="ID"/>, to match <see cref="Equals(Element)"/>.
+        /// </summary>
+        public override int GetHashCode()
+        {
+            return ID.GetHashCode();
         }
     }
 

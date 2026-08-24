@@ -584,7 +584,7 @@ namespace Datamodel.Codecs
                 StringDict.WriteSelf(Writer);
 
                 {
-                    var counter = new HashSet<Element>(); //(Element.IDComparer.Default);
+                    var counter = new HashSet<Element>();
                     var elementCount = CountChildren(Datamodel.Root, counter);
 
                     Writer.Write(elementCount);

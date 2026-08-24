@@ -256,6 +256,70 @@ namespace Datamodel_Tests
     public class Functionality : DatamodelTests
     {
         [Test]
+        public static void ElementEqualityMatchesHashCode()
+        {
+            var id = Guid.NewGuid();
+            var element = new Element { ID = id };
+            var sameId = new Element { ID = id };
+            var otherId = new Element { ID = Guid.NewGuid() };
+
+            // Equality is by ID, so anything hashing these has to agree.
+            Assert.True(element.Equals(sameId));
+            Assert.True(element.Equals((object)sameId));
+            Assert.AreEqual(element.GetHashCode(), sameId.GetHashCode());
+
+            Assert.False(element.Equals(otherId));
+            Assert.False(element.Equals((object)otherId));
+            Assert.False(element.Equals(null));
+            Assert.False(element.Equals("not an element"));
+
+            var set = new HashSet<Element> { element };
+            Assert.True(set.Contains(sameId));
+            Assert.False(set.Add(sameId));
+            Assert.True(set.Add(otherId));
+
+            var dictionary = new Dictionary<Element, int> { [element] = 1 };
+            Assert.True(dictionary.ContainsKey(sameId));
+            Assert.AreEqual(1, dictionary[sameId]);
+        }
+
+        [Test]
+        public static void ElementHashCollisionsStayDistinct()
+        {
+            // Guid.GetHashCode folds 128 bits into 32, so distinct IDs can share a hash code. These two do.
+            var a = new Guid("ee080de0-48b6-4173-86ba-9c6bc7b989ef");
+            var b = new Guid("2e3e559b-4817-441f-aaad-d9b931f696f8");
+            Assert.AreNotEqual(a, b);
+            Assert.AreEqual(a.GetHashCode(), b.GetHashCode(), "these GUIDs were chosen because their hashes collide");
+
+            using var dm = MakeDatamodel();
+            dm.Root = new Element(dm, "root", Guid.NewGuid());
+            var first = new Element(dm, "first", a);
+            var second = new Element(dm, "second", b);
+            dm.Root["first"] = first;
+            dm.Root["second"] = second;
+
+            // A colliding hash only shares a bucket; Equals still has to separate them.
+            Assert.False(first.Equals(second));
+            var set = new HashSet<Element> { first, second };
+            Assert.AreEqual(2, set.Count);
+
+            foreach (var (encoding, version) in new[] { ("binary", 9), ("keyvalues2", 4) })
+            {
+                using var stream = new MemoryStream();
+                dm.Save(stream, encoding, version);
+                stream.Seek(0, SeekOrigin.Begin);
+
+                using var loaded = DM.Load(stream);
+                Assert.AreEqual(3, loaded.AllElements.Count, encoding);
+                Assert.AreEqual(a, loaded.Root.Get<Element>("first").ID, encoding);
+                Assert.AreEqual(b, loaded.Root.Get<Element>("second").ID, encoding);
+                Assert.AreEqual("first", loaded.Root.Get<Element>("first").Name, encoding);
+                Assert.AreEqual("second", loaded.Root.Get<Element>("second").Name, encoding);
+            }
+        }
+
+        [Test]
         public static void TypedArrayAddingRemoving()
         {
             using var dm = MakeDatamodel();
