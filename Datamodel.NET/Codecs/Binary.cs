@@ -126,6 +126,10 @@ namespace Datamodel.Codecs
             readonly int EncodingVersion;
 
             readonly List<string> Strings = [];
+
+            /// <summary>Fast string index lookup.</summary>
+            readonly Dictionary<string, int>? Indices;
+
             public bool Dummy;
 
             // binary 4 uses int for dictionary length, but short for dictionary indices. Whoops!
@@ -157,10 +161,10 @@ namespace Datamodel.Codecs
                 Dummy = EncodingVersion == 1;
                 if (!Dummy)
                 {
+                    Indices = [];
                     Scraped = [];
 
                     ScrapeElement(dm.Root);
-                    Strings = Strings.Distinct().ToList();
                 }
             }
 
@@ -200,13 +204,20 @@ namespace Datamodel.Codecs
             {
                 value ??= string.Empty;
 
-                Strings.Add(value);
+                if (Indices == null)
+                {
+                    Strings.Add(value);
+                    return;
+                }
+
+                if (Indices.TryAdd(value, Strings.Count))
+                    Strings.Add(value);
             }
 
             int GetIndex(string value)
             {
                 value ??= string.Empty;
-                return Strings.IndexOf(value);
+                return Indices!.TryGetValue(value, out var index) ? index : -1;
             }
 
             public string ReadString(BinaryReader reader)
