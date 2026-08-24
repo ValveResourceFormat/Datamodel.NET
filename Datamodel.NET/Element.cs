@@ -161,7 +161,10 @@ namespace Datamodel
 
         #region Properties
 
-        // TODO: this could probably be sped up by caching the properties somehow
+        /// <remarks>
+        /// This is expensive enough to dominate Element construction, so it must only ever be called once per
+        /// type. <see cref="AttributeList"/> caches the result; don't call it from a hot path.
+        /// </remarks>
         protected override ICollection<(string Name, PropertyInfo Property)>? GetPropertyDerivedAttributeList()
         {
             var type = GetType();

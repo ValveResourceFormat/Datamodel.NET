@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Diagnostics;
@@ -88,20 +89,34 @@ namespace Datamodel
             Binary,
         }
 
+        /// <summary>
+        /// Cache of the read-only <see cref="PropertyInfos"/> shared by every instance of a given type. The contents
+        /// only depend on the type, so building one per instance is pure overhead when many are created at once.
+        /// </summary>
+        static readonly ConcurrentDictionary<Type, OrderedDictionary> PropertyInfoCache = new();
+
         public AttributeList(Datamodel? owner)
         {
+            PropertyInfos = PropertyInfoCache.TryGetValue(GetType(), out var cached) ? cached : CachePropertyInfos();
+
+            Inner = [];
+            Owner = owner;
+        }
+
+        OrderedDictionary CachePropertyInfos()
+        {
             var propertyAttributes = GetPropertyDerivedAttributeList();
-            PropertyInfos = new OrderedDictionary(propertyAttributes?.Count ?? 0);
+            var propertyInfos = new OrderedDictionary(propertyAttributes?.Count ?? 0);
             if (propertyAttributes != null)
             {
                 foreach (var attr in propertyAttributes)
                 {
-                    PropertyInfos.Add(attr.Name, attr.Property);
+                    propertyInfos.Add(attr.Name, attr.Property);
                 }
             }
 
-            Inner = [];
-            Owner = owner;
+            // Read-only so that the shared instance can't be mutated through one of its owners.
+            return PropertyInfoCache.GetOrAdd(GetType(), propertyInfos.AsReadOnly());
         }
 
         /// <summary>
