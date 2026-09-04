@@ -361,7 +361,7 @@ namespace Datamodel.Codecs
                 writer.WriteTokens("$prefix_element$");
                 writer.WriteLine("{");
                 writer.Indent++;
-                writer.WriteTokenLine("id", "elementid", Guid.NewGuid().ToString());
+                writer.WriteTokenLine("id", "elementid", dm.PrefixElementId.ToString());
                 foreach (var attr in dm.PrefixAttributes)
                     if (attr.Value != null)
                     {
@@ -405,7 +405,9 @@ namespace Datamodel.Codecs
             // we can go trough these and actually create the attributes
             // and add the elements to lists
             public Dictionary<Element, List<(string, Guid)>> PropertiesToAdd = [];
-            public Dictionary<IList, List<Guid>> ListRefs = [];
+
+            // array items referenced by id keep their slot (filled with null while parsing) and are resolved in place afterwards
+            public List<(IList List, int Index, Guid Id)> ListRefs = [];
 
             public void HandleElementProp(Element? element, string attrName, Guid id)
             {
@@ -426,17 +428,10 @@ namespace Datamodel.Codecs
 
             }
 
-            public void HandleListRefs(IList list, Guid id)
+            public void HandleListRefs(ElementArray list, Guid id)
             {
-                ListRefs.TryGetValue(list, out var guidList);
-
-                if (guidList == null)
-                {
-                    guidList = [];
-                    ListRefs.Add(list, guidList);
-                }
-
-                guidList.Add(id);
+                list.Add(null!);
+                ListRefs.Add((list, list.Count - 1, id));
             }
         }
 
@@ -511,6 +506,10 @@ namespace Datamodel.Codecs
                         CodecUtilities.TryConstructCustomElement(elementFactory, reflectionParams, dataModel, elem_class, elem_name, id, out elem);
                         elem ??= new Element(dataModel, elem_name, id, elem_class);
                     }
+                    else
+                    {
+                        dataModel.PrefixElementId = id;
+                    }
 
                     continue;
                 }
@@ -526,6 +525,9 @@ namespace Datamodel.Codecs
                 if (attr_type_s == "element")
                 {
                     var id_s = Decode_NextToken(reader);
+
+                    // the attribute keeps its position, it is filled in once every element has been parsed; an empty id is a null reference
+                    elem?.Add(attr_name, null);
 
                     if (!string.IsNullOrEmpty(id_s))
                     {
@@ -556,7 +558,11 @@ namespace Datamodel.Codecs
 
                             if (!string.IsNullOrEmpty(id_s))
                             {
-                                intermediateData.HandleListRefs(array, new Guid(id_s));
+                                intermediateData.HandleListRefs((ElementArray)array, new Guid(id_s));
+                            }
+                            else
+                            {
+                                ((ElementArray)array).Add(null!);
                             }
                         }
                         // inline Element
@@ -698,13 +704,9 @@ namespace Datamodel.Codecs
 
             }
 
-            foreach (var list in intermediateData.ListRefs)
+            foreach (var (list, index, id) in intermediateData.ListRefs)
             {
-                foreach (var id in list.Value)
-                {
-                    var elemToAdd = dataModel.AllElements[id];
-                    list.Key.Add(elemToAdd);
-                }
+                list[index] = dataModel.AllElements[id];
             }
 
             return dataModel;
