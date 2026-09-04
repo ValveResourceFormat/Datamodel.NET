@@ -412,7 +412,10 @@ namespace Datamodel
             dm.Encoding = encoding;
             dm.EncodingVersion = encoding_version;
 
-            dm.Root = (T?)dm.Root;
+            if (dm.Root is not null and not T)
+            {
+                throw new InvalidDataException($"The root element is a '{dm.Root.ClassName}' loaded as {dm.Root.GetType().Name}, not {typeof(T).Name}. Check that the class exists in the namespace used to load the file.");
+            }
 
             return dm;
         }
