@@ -276,20 +276,16 @@ namespace Datamodel
             set
             {
                 ArgumentNullException.ThrowIfNull(name);
-                if (value != null && !Datamodel.IsDatamodelType(value.GetType()))
-                    throw new AttributeTypeException($"{value.GetType().FullName} is not a valid Datamodel attribute type. (If this is an array, it must implement IList<T>).");
 
-                if (Owner != null && this == Owner.PrefixAttributes && value?.GetType() == typeof(Element))
-                    throw new AttributeTypeException("Elements are not supported as prefix attributes.");
-
-                var binding = Schema.GetProperty(name);
+                // a value that fits a class property is a valid attribute type by construction, so it skips the type table
+                var binding = Schema.Properties.Count > 0 ? Schema.GetProperty(name) : null;
 
                 if (binding != null)
                 {
                     if (binding.CanWrite)
                     {
-                        // null is fine, it will just set the value to null
-                        if (value != null && !binding.PropertyType.IsInstanceOfType(value))
+                        // null is fine, it will just set the value to null; an exact type match is the common case and avoids the runtime cast check
+                        if (value != null && binding.PropertyType != value.GetType() && !binding.PropertyType.IsInstanceOfType(value))
                         {
                             value = ConvertScalar(value, binding.PropertyType)
                                 ?? throw new InvalidDataException($"class property '{Schema.ElementType.Name}.{binding.PropertyName}' with type '{binding.PropertyType}' can not hold a value of type '{value.GetType()}' (attribute '{name}'), this is likely a mismatch between the real class and the class from the datamodel");
@@ -324,6 +320,12 @@ namespace Datamodel
                     return;
                 }
 
+                if (value != null && !Datamodel.IsDatamodelType(value.GetType()))
+                    throw new AttributeTypeException($"{value.GetType().FullName} is not a valid Datamodel attribute type. (If this is an array, it must implement IList<T>).");
+
+                if (Owner != null && this == Owner.PrefixAttributes && value?.GetType() == typeof(Element))
+                    throw new AttributeTypeException("Elements are not supported as prefix attributes.");
+
                 Attribute? old_attr;
                 Attribute? new_attr;
                 int old_index = -1;
@@ -337,7 +339,7 @@ namespace Datamodel
                         old_index = IndexOf(old_attr.Name);
                         Inner.Remove(old_attr);
                     }
-                    Insert(old_index == -1 ? Count : old_index, new Attribute(name, this, value), notify: false);
+                    Insert(old_index == -1 ? Inner.Count : old_index, new_attr, notify: false);
                 }
 
                 NotifyCollectionChangedEventArgs change_args;
