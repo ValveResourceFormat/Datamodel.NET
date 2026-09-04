@@ -22,6 +22,11 @@ namespace Datamodel.Codecs
         BinaryReader? Reader;
 
         /// <summary>
+        /// Elements in the order the stream declares them. Element references are indices into this list, which must not change for deferred loading.
+        /// </summary>
+        readonly List<Element> ElementIndex = [];
+
+        /// <summary>
         /// The number of Datamodel binary ticks in one second. Used to store TimeSpan values.
         /// </summary>
         const uint DatamodelTicksPerSecond = 10000;
@@ -322,7 +327,10 @@ namespace Datamodel.Codecs
                 return dm.AllElements[id] ?? new Element(dm, id);
             }
 
-            return dm.AllElements[index];
+            if (index < 0 || index >= ElementIndex.Count)
+                throw new CodecException($"Element index {index} is out of range.");
+
+            return ElementIndex[index];
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -416,16 +424,18 @@ namespace Datamodel.Codecs
                 var id_bits = Reader.ReadBytes(16);
                 var id = new Guid(BitConverter.IsLittleEndian ? id_bits : id_bits.Reverse().ToArray());
 
-                if (!CodecUtilities.TryConstructCustomElement(elementFactory, reflectionParams, dm, type, name, id, out _))
+                if (!CodecUtilities.TryConstructCustomElement(elementFactory, reflectionParams, dm, type, name, id, out var elem))
                 {
                     // note: constructing an element, adds it to the datamodel.AllElements
-                    _ = new Element(dm, name, id, type);
+                    elem = new Element(dm, name, id, type);
                 }
+
+                ElementIndex.Add(elem!);
             }
 
 
             // read attributes (or not, if we're deferred)
-            foreach (var elem in dm.AllElements.ToArray())
+            foreach (var elem in ElementIndex)
             {
                 // assert if stub
                 Debug.Assert(!elem.Stub);
