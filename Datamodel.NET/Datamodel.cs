@@ -335,6 +335,7 @@ namespace Datamodel
                 reflectionParams.Namespace = templateType.Namespace!;
             }
 
+            reflectionParams.RootAssembly ??= templateType.Assembly;
 
             stream.Seek(0, SeekOrigin.Begin);
             var header = string.Empty;

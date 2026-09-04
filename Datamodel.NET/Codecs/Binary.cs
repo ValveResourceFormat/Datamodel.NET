@@ -397,8 +397,7 @@ namespace Datamodel.Codecs
 
         public Datamodel Decode(string encoding, int encoding_version, string format, int format_version, Stream stream, DeferredMode defer_mode, ReflectionParams reflectionParams)
         {
-            var elementFactoryTypes = CodecUtilities.GetIElementFactoryClasses();
-            var elementFactory = (IElementFactory)Activator.CreateInstance(elementFactoryTypes.First());
+            var resolver = new ElementTypeResolver(reflectionParams);
 
             stream.Seek(0, SeekOrigin.Begin);
             while (true)
@@ -438,7 +437,7 @@ namespace Datamodel.Codecs
                 var id_bits = Reader.ReadBytes(16);
                 var id = new Guid(BitConverter.IsLittleEndian ? id_bits : id_bits.Reverse().ToArray());
 
-                if (!CodecUtilities.TryConstructCustomElement(elementFactory, reflectionParams, dm, type, name, id, out var elem))
+                if (!CodecUtilities.TryConstructCustomElement(resolver, dm, type, name, id, out var elem))
                 {
                     // note: constructing an element, adds it to the datamodel.AllElements
                     elem = new Element(dm, name, id, type);

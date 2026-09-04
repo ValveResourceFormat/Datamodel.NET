@@ -425,7 +425,7 @@ namespace Datamodel.Codecs
             }
         }
 
-        Element? Decode_ParseElement(IElementFactory elementFactory, string class_name, ReflectionParams reflectionParams, StreamReader reader, Datamodel dataModel, IntermediateData intermediateData)
+        Element? Decode_ParseElement(ElementTypeResolver resolver, string class_name, StreamReader reader, Datamodel dataModel, IntermediateData intermediateData)
         {
             string elem_class = class_name ?? Decode_NextToken(reader);
             string elem_name = string.Empty;
@@ -449,7 +449,7 @@ namespace Datamodel.Codecs
                     var id = new Guid(elem_id);
                     if (elem_class != "$prefix_element$")
                     {
-                        CodecUtilities.TryConstructCustomElement(elementFactory, reflectionParams, dataModel, elem_class, elem_name, id, out elem);
+                        CodecUtilities.TryConstructCustomElement(resolver, dataModel, elem_class, elem_name, id, out elem);
                         elem ??= new Element(dataModel, elem_name, id, elem_class);
                     }
                     else
@@ -485,7 +485,7 @@ namespace Datamodel.Codecs
                 object? attr_value = null;
 
                 if (attr_type == null)
-                    attr_value = Decode_ParseElement(elementFactory, attr_type_s, reflectionParams, reader, dataModel, intermediateData);
+                    attr_value = Decode_ParseElement(resolver, attr_type_s, reader, dataModel, intermediateData);
                 else if (attr_type_s.EndsWith("_array"))
                 {
                     var array = CodecUtilities.MakeList(attr_type, 5); // assume 5 items
@@ -514,17 +514,17 @@ namespace Datamodel.Codecs
                         // inline Element
                         else if (attr_type == typeof(Element))
                         {
-                            array.Add(Decode_ParseElement(elementFactory, next, reflectionParams, reader, dataModel, intermediateData));
+                            array.Add(Decode_ParseElement(resolver, next, reader, dataModel, intermediateData));
                         }
                         // normal value
                         else
                         {
-                            array.Add(Decode_ParseValue(elementFactory, attr_type, next, reflectionParams, reader, dataModel, intermediateData));
+                            array.Add(Decode_ParseValue(resolver, attr_type, next, reader, dataModel, intermediateData));
                         }
                     }
                 }
                 else
-                    attr_value = Decode_ParseValue(elementFactory, attr_type, Decode_NextToken(reader), reflectionParams, reader, dataModel, intermediateData);
+                    attr_value = Decode_ParseValue(resolver, attr_type, Decode_NextToken(reader), reader, dataModel, intermediateData);
 
                 if (elem != null)
                     elem.Add(attr_name, attr_value);
@@ -534,7 +534,7 @@ namespace Datamodel.Codecs
             return elem;
         }
 
-        object? Decode_ParseValue(IElementFactory elementFactory, Type type, string value, ReflectionParams reflectionParams, StreamReader reader, Datamodel dataModel, IntermediateData intermediateData)
+        object? Decode_ParseValue(ElementTypeResolver resolver, Type type, string value, StreamReader reader, Datamodel dataModel, IntermediateData intermediateData)
         {
             if (type == typeof(string))
                 return value;
@@ -542,7 +542,7 @@ namespace Datamodel.Codecs
             value = value.Trim();
 
             if (type == typeof(Element))
-                return Decode_ParseElement(elementFactory, value, reflectionParams, reader, dataModel, intermediateData);
+                return Decode_ParseElement(resolver, value, reader, dataModel, intermediateData);
             if (type == typeof(int))
                 return int.Parse(value, CultureInfo.InvariantCulture);
             else if (type == typeof(float))
@@ -612,8 +612,7 @@ namespace Datamodel.Codecs
 
         public Datamodel Decode(string encoding, int encoding_version, string format, int format_version, Stream stream, DeferredMode defer_mode, ReflectionParams reflectionParams)
         {
-            var elementFactoryTypes = CodecUtilities.GetIElementFactoryClasses();
-            var elementFactory = (IElementFactory)Activator.CreateInstance(elementFactoryTypes.First());
+            var resolver = new ElementTypeResolver(reflectionParams);
 
             var dataModel = new Datamodel(format, format_version);
 
@@ -636,7 +635,7 @@ namespace Datamodel.Codecs
                 { break; }
 
                 try
-                { Decode_ParseElement(elementFactory, next, reflectionParams, reader, dataModel, intermediateData); }
+                { Decode_ParseElement(resolver, next, reader, dataModel, intermediateData); }
                 catch (Exception err)
                 { throw new CodecException($"KeyValues2 decode failed on line {Line}:\n\n{err.Message}", err); }
             }

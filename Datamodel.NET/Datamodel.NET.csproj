@@ -57,7 +57,7 @@
   </ItemGroup>
 
   <ItemGroup>
-  	<ProjectReference Include="..\ElementFactoryGenerator\ElementFactoryGenerator.csproj" Version="0.2" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
+  	<ProjectReference Include="..\ElementFactoryGenerator\ElementFactoryGenerator.csproj" Version="0.2.1" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
   </ItemGroup>
-	
+
 </Project>
