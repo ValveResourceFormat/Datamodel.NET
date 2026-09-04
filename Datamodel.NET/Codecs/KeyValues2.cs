@@ -78,7 +78,12 @@ namespace Datamodel.Codecs
 
             static string Sanitise(string value)
             {
-                return value.Replace("\"", "\\\"");
+                return value
+                    .Replace("\\", "\\\\")
+                    .Replace("\"", "\\\"")
+                    .Replace("\n", "\\n")
+                    .Replace("\r", "\\r")
+                    .Replace("\t", "\\t");
             }
 
             /// <summary>
@@ -449,7 +454,13 @@ namespace Datamodel.Codecs
                 var c = (char)read;
                 if (escaped)
                 {
-                    TokenBuilder.Append(c);
+                    TokenBuilder.Append(c switch
+                    {
+                        'n' => '\n',
+                        'r' => '\r',
+                        't' => '\t',
+                        _ => c,
+                    });
                     escaped = false;
                     continue;
                 }
@@ -464,6 +475,7 @@ namespace Datamodel.Codecs
                     case '\r':
                     case '\n':
                         Line++;
+                        if (in_block) TokenBuilder.Append(c);
                         break;
                     case '{':
                     case '}':
