@@ -500,45 +500,53 @@ namespace Datamodel.Codecs
 
             if (!isArray)
                 return ReadValue(dm, TypeMap[type.TypeHandle], EncodingVersion < 4 || prefix, reader);
-            else
-            {
-                var count = reader.ReadInt32();
-                var array = CodecUtilities.MakeList(type, count);
 
-                // value types whose memory layout matches the stream are copied into the list in one read, instead of one boxed item at a time
-                if (BitConverter.IsLittleEndian && count > 0)
-                {
-                    switch (array)
-                    {
-                        case IntArray ints: ReadItems(ints, count, reader); return array;
-                        case FloatArray floats: ReadItems(floats, count, reader); return array;
-                        case BoolArray bools: ReadItems(bools, count, reader); return array;
-                        case Vector2Array vectors: ReadItems(vectors, count, reader); return array;
-                        case Vector3Array vectors: ReadItems(vectors, count, reader); return array;
-                        case Vector4Array vectors: ReadItems(vectors, count, reader); return array;
-                        case QuaternionArray quaternions: ReadItems(quaternions, count, reader); return array;
-                        case MatrixArray matrices: ReadItems(matrices, count, reader); return array;
-                        case ColorArray colors: ReadItems(colors, count, reader); return array;
-                        case ByteArray bytes: ReadItems(bytes, count, reader); return array;
-                        case UInt64Array ulongs: ReadItems(ulongs, count, reader); return array;
-                    }
-                }
-
-                var typeId = TypeMap[type.TypeHandle];
-                for (var i = 0; i < count; i++)
-                    array.Add(ReadValue(dm, typeId, true, reader));
-
-                return array;
-            }
+            return ReadArray(dm, type, reader.ReadInt32(), reader);
         }
 
         /// <summary>
-        /// Reads <paramref name="count"/> items straight into the list's storage. Only for types stored in the stream exactly as in memory.
+        /// Storage shared by the value type arrays of this stream, see <see cref="ArrayChunks"/>.
         /// </summary>
-        static void ReadItems<T>(Array<T> array, int count, BinaryReader reader) where T : unmanaged
+        readonly ArrayChunks Chunks = new();
+
+        /// <summary>
+        /// Reads an array attribute. Value types whose memory layout matches the stream are copied in one read into a slice of a shared chunk,
+        /// instead of one boxed item at a time into a list of their own.
+        /// </summary>
+        System.Collections.IList ReadArray(Datamodel dm, Type type, int count, BinaryReader reader)
         {
-            var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(array.AppendUninitialized(count));
-            reader.BaseStream.ReadExactly(bytes);
+            var typeId = TypeMap[type.TypeHandle];
+
+            if (BitConverter.IsLittleEndian && count > 0)
+            {
+                switch (typeId)
+                {
+                    case 1: { var (buffer, offset) = ReadChunk<int>(count, reader); return new IntArray(buffer, offset, count); }
+                    case 2: { var (buffer, offset) = ReadChunk<float>(count, reader); return new FloatArray(buffer, offset, count); }
+                    case 3: { var (buffer, offset) = ReadChunk<bool>(count, reader); return new BoolArray(buffer, offset, count); }
+                    case 7: { var (buffer, offset) = ReadChunk<Color>(count, reader); return new ColorArray(buffer, offset, count); }
+                    case 8: { var (buffer, offset) = ReadChunk<Vector2>(count, reader); return new Vector2Array(buffer, offset, count); }
+                    case 9: { var (buffer, offset) = ReadChunk<Vector3>(count, reader); return new Vector3Array(buffer, offset, count); }
+                    case 11: { var (buffer, offset) = ReadChunk<Vector4>(count, reader); return new Vector4Array(buffer, offset, count); }
+                    case 12: { var (buffer, offset) = ReadChunk<Quaternion>(count, reader); return new QuaternionArray(buffer, offset, count); }
+                    case 13: { var (buffer, offset) = ReadChunk<Matrix4x4>(count, reader); return new MatrixArray(buffer, offset, count); }
+                    case 14: { var (buffer, offset) = ReadChunk<byte>(count, reader); return new ByteArray(buffer, offset, count); }
+                    case 15: { var (buffer, offset) = ReadChunk<ulong>(count, reader); return new UInt64Array(buffer, offset, count); }
+                }
+            }
+
+            var array = CodecUtilities.MakeList(type, count);
+            for (var i = 0; i < count; i++)
+                array.Add(ReadValue(dm, typeId, true, reader));
+
+            return array;
+        }
+
+        (T[] Buffer, int Offset) ReadChunk<T>(int count, BinaryReader reader) where T : unmanaged
+        {
+            var (buffer, offset) = Chunks.Rent<T>(count);
+            reader.BaseStream.ReadExactly(System.Runtime.InteropServices.MemoryMarshal.AsBytes(buffer.AsSpan(offset, count)));
+            return (buffer, offset);
         }
 
         void SkipAttribute(BinaryReader reader)

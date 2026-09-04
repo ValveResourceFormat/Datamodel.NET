@@ -248,7 +248,7 @@ namespace Datamodel
                     }
                     if (value is ElementArray elem_array)
                     {
-                        foreach (var item in elem_array.RawList)
+                        foreach (var item in elem_array.RawItems)
                         {
                             if (item != null && found.Add(item))
                             {
