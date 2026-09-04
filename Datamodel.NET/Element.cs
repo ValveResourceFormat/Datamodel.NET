@@ -67,7 +67,7 @@ namespace Datamodel
         public Element()
             : base(null)
         {
-            ID = Guid.NewGuid();
+            // the ID is generated on first use, so that a codec constructing the Element and assigning the ID from the file does not pay for a random one
 
             // For subclasses get the actual classname
             if (GetType() != typeof(Element))
@@ -95,7 +95,26 @@ namespace Datamodel
         /// <see cref="GetHashCode"/>. Assign it before the Element joins a <see cref="Datamodel"/> or any other
         /// hash-based collection, because changing it afterwards strands the Element in its old bucket.
         /// </remarks>
-        public Guid ID { get; set; }
+        public Guid ID
+        {
+            get
+            {
+                if (!idAssigned)
+                {
+                    id = Guid.NewGuid();
+                    idAssigned = true;
+                }
+
+                return id;
+            }
+            set
+            {
+                id = value;
+                idAssigned = true;
+            }
+        }
+        Guid id;
+        bool idAssigned;
 
         /// <summary>
         /// Gets or sets the name of this Element.
