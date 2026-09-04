@@ -43,6 +43,45 @@ namespace Datamodel
             return result;
         }
 
+        /// <summary>
+        /// Converts between the bool, int and float attribute types the way Valve's datamodel does when a value is assigned
+        /// to an attribute of another of those types. Returns null for any other combination.
+        /// </summary>
+        private static object? ConvertScalar(object value, Type targetType)
+        {
+            if (targetType == typeof(int))
+            {
+                return value switch
+                {
+                    bool b => b ? 1 : 0,
+                    float f => (int)f,
+                    _ => null,
+                };
+            }
+
+            if (targetType == typeof(float))
+            {
+                return value switch
+                {
+                    bool b => b ? 1f : 0f,
+                    int i => (float)i,
+                    _ => null,
+                };
+            }
+
+            if (targetType == typeof(bool))
+            {
+                return value switch
+                {
+                    int i => i != 0,
+                    float f => f != 0f,
+                    _ => null,
+                };
+            }
+
+            return null;
+        }
+
         internal class DebugView
         {
             public DebugView(AttributeList item)
@@ -285,7 +324,8 @@ namespace Datamodel
                         // null is fine, it will just set the value to null
                         if (value != null && !prop.PropertyType.IsInstanceOfType(value))
                         {
-                            throw new InvalidDataException($"class property '{prop.DeclaringType!.Name}.{prop.Name}' with type '{prop.PropertyType}' can not hold a value of type '{value.GetType()}' (attribute '{name}'), this is likely a mismatch between the real class and the class from the datamodel");
+                            value = ConvertScalar(value, prop.PropertyType)
+                                ?? throw new InvalidDataException($"class property '{prop.DeclaringType!.Name}.{prop.Name}' with type '{prop.PropertyType}' can not hold a value of type '{value.GetType()}' (attribute '{name}'), this is likely a mismatch between the real class and the class from the datamodel");
                         }
 
                         prop.SetValue(this, value);

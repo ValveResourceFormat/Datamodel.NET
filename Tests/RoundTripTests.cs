@@ -232,9 +232,28 @@ namespace Datamodel_Tests
             using var dm = new DM("vmap", 29);
             var mesh = new CMapMesh();
 
-            // disableShadows is an int in the file format
-            var exception = Assert.Throws<InvalidDataException>(() => mesh["disableShadows"] = true);
+            var exception = Assert.Throws<InvalidDataException>(() => mesh["disableShadows"] = "3");
             Assert.That(exception!.Message, Does.Contain("disableShadows"));
+        }
+
+        [Test]
+        public void Typed_ConvertsBetweenBoolIntAndFloat()
+        {
+            using var dm = new DM("vmap", 29);
+            var mesh = new CMapMesh();
+
+            // files written by older tools store some int attributes as bool, and Valve's datamodel converts between the scalar types
+            mesh["disableShadows"] = true;
+            Assert.That(mesh.DisableShadows, Is.EqualTo(1));
+
+            mesh["renderToCubemaps"] = 0;
+            Assert.That(mesh.RenderToCubemaps, Is.False);
+
+            mesh["smoothingAngle"] = 45;
+            Assert.That(mesh.SmoothingAngle, Is.EqualTo(45f));
+
+            mesh["renderAmt"] = 127.9f;
+            Assert.That(mesh.RenderAmount, Is.EqualTo(127));
         }
 
         static byte[] Save(DM dm)
