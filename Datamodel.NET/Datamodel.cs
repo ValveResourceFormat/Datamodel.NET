@@ -968,11 +968,11 @@ namespace Datamodel
     [Serializable]
     public class DestubException : Exception
     {
-        internal DestubException(Attribute attr, Exception innerException)
+        internal DestubException(AttributeList owner, string attributeName, Exception innerException)
             : base("An exception occured while destubbing the value of an attribute.", innerException)
         {
-            Data.Add("Element", ((Element?)attr.Owner)?.ID);
-            Data.Add("Attribute", attr.Name);
+            Data.Add("Element", (owner as Element)?.ID);
+            Data.Add("Attribute", attributeName);
         }
 
         internal DestubException(ElementArray array, int index, Exception innerException)

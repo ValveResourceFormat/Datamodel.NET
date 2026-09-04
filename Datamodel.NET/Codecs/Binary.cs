@@ -458,7 +458,7 @@ namespace Datamodel.Codecs
                     }
                     else
                     {
-                        elem.Add(name, DecodeAttribute(dm, false, Reader));
+                        DecodeAttributeInto(dm, elem, name, Reader);
                     }
                 }
             }
@@ -502,6 +502,41 @@ namespace Datamodel.Codecs
                 return ReadValue(dm, TypeMap[type.TypeHandle], EncodingVersion < 4 || prefix, reader);
 
             return ReadArray(dm, type, reader.ReadInt32(), reader);
+        }
+
+        /// <summary>
+        /// Reads an attribute of an element straight into the element, so that value types are stored inline without being boxed.
+        /// </summary>
+        void DecodeAttributeInto(Datamodel dm, AttributeList target, string name, BinaryReader reader)
+        {
+            var (type, isArray) = IdToType(reader.ReadByte());
+
+            if (isArray)
+            {
+                target[name] = ReadArray(dm, type, reader.ReadInt32(), reader);
+                return;
+            }
+
+            switch (TypeMap[type.TypeHandle])
+            {
+                case 0: target[name] = ReadElement(dm, reader); break;
+                case 1: target.Set(name, reader.ReadInt32()); break;
+                case 2: target.Set(name, reader.ReadSingle()); break;
+                case 3: target.Set(name, reader.ReadBoolean()); break;
+                case 4: target[name] = EncodingVersion < 4 ? ReadString_Raw(reader) : StringDict!.ReadString(reader); break;
+                case 5: target[name] = reader.ReadBytes(reader.ReadInt32()); break;
+                case 6: target.Set(name, TimeSpan.FromTicks(reader.ReadInt32() * (TimeSpan.TicksPerSecond / DatamodelTicksPerSecond))); break;
+                case 7: target.Set(name, ReadColor(reader)); break;
+                case 8: target.Set(name, ReadVector2(reader)); break;
+                case 9: target.Set(name, ReadVector3(reader)); break;
+                case 10: target.Set(name, ReadQAngle(reader)); break;
+                case 11: target.Set(name, ReadVector4(reader)); break;
+                case 12: target.Set(name, ReadQuaternion(reader)); break;
+                case 13: target[name] = ReadMatrix4x4(reader); break;
+                case 14: target.Set(name, reader.ReadByte()); break;
+                case 15: target.Set(name, reader.ReadUInt64()); break;
+                default: throw new ArgumentException("Cannot read value of type");
+            }
         }
 
         /// <summary>

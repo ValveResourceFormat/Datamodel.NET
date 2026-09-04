@@ -235,7 +235,7 @@ namespace Datamodel
                 }
 
                 found.Add(elem);
-                foreach (var value in elem.Inner.Values.Cast<Attribute>().Select(a => a.RawValue))
+                foreach (var value in elem.EnumerateReferences())
                 {
                     if (value is Element value_elem)
                     {

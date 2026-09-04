@@ -352,8 +352,7 @@ namespace Datamodel
         /// <param name="offset">The location of the attribute's value in the Datamodel's source stream.</param>
         internal void Add(string key, long offset)
         {
-            lock (Attribute_ChangeLock)
-                Inner[key] = new Attribute(key, this, offset);
+            SetDeferred(key, offset);
         }
 
         public override bool ContainsKey(string key)

@@ -182,7 +182,7 @@ namespace Datamodel_Tests
                 var name = value.GetType().Name;
 
                 dm.Root[name] = value;
-                await Assert.That(dm.Root[name]).IsSameReferenceAs(value);
+                await Assert.That(dm.Root[name]).IsEqualTo(value); // value types are stored inline, so the box read back is a new one
 
                 name += " array";
                 var list = value.GetType().MakeListType().GetConstructor(Type.EmptyTypes).Invoke(null) as IList;

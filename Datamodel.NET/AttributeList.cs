@@ -1,39 +1,656 @@
-﻿using System;
+using System;
 using System.Collections;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Specialized;
-using System.Diagnostics;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 using AttrKVP = System.Collections.Generic.KeyValuePair<string, object?>;
-using System.IO;
 
 namespace Datamodel
 {
     /// <summary>
-    /// A thread-safe collection of <see cref="Attribute"/>s.
+    /// What an <see cref="AttributeSlot"/> holds inline. <see cref="Reference"/> covers everything stored as an object: strings, binary blobs, matrices, elements, arrays and null.
+    /// </summary>
+    enum AttributeKind : byte
+    {
+        Reference,
+        Int,
+        Float,
+        Bool,
+        Byte,
+        UInt64,
+        Time,
+        Color,
+        Vector2,
+        Vector3,
+        Vector4,
+        Quaternion,
+        QAngle,
+    }
+
+    /// <summary>
+    /// Sixteen bytes that hold any scalar or vector attribute value without boxing it.
+    /// </summary>
+    [StructLayout(LayoutKind.Explicit, Size = 16)]
+    struct InlineValue
+    {
+        [FieldOffset(0)] public int Int;
+        [FieldOffset(0)] public float Float;
+        [FieldOffset(0)] public bool Bool;
+        [FieldOffset(0)] public byte Byte;
+        [FieldOffset(0)] public ulong UInt64;
+        [FieldOffset(0)] public long Ticks;
+        [FieldOffset(0)] public Color Color;
+        [FieldOffset(0)] public Vector2 Vector2;
+        [FieldOffset(0)] public Vector3 Vector3;
+        [FieldOffset(0)] public Vector4 Vector4;
+        [FieldOffset(0)] public Quaternion Quaternion;
+        [FieldOffset(0)] public QAngle QAngle;
+    }
+
+    /// <summary>
+    /// One attribute of an <see cref="AttributeList"/>: its name and its value, stored inline for value types and as a reference otherwise.
+    /// Modelled on Valve's fixed-size CDmAttribute, so that a plain element costs one slot per attribute and no further objects.
+    /// </summary>
+    struct AttributeSlot
+    {
+        public string Name;
+        public object? Reference;
+        public InlineValue Inline;
+        /// <summary>When not zero, the value has not been read from the stream yet and starts at this position.</summary>
+        public long Offset;
+        public AttributeKind Kind;
+        public AttributeList.OverrideType? Override;
+    }
+
+    /// <summary>
+    /// A thread-safe collection of attributes.
     /// </summary>
     [DebuggerTypeProxy(typeof(DebugView))]
     [DebuggerDisplay("Count = {Count}")]
     public class AttributeList : IDictionary<string, object?>, IDictionary
     {
-        internal OrderedDictionary Inner;
-        protected object Attribute_ChangeLock = new();
+        AttributeSlot[]? slots;
+        int count;
+
+        /// <summary>
+        /// The object locked while the list is changed. The list itself, which is also its <see cref="SyncRoot"/>.
+        /// </summary>
+        protected object Attribute_ChangeLock;
 
         /// <summary>
         /// Gets the properties of this class that are stored as attributes. Empty unless a schema is registered for the class.
         /// </summary>
         public ElementSchema Schema { get; }
 
-        private IEnumerable<Attribute> GetPropertyBasedAttributes(bool useSerializationName)
+        public AttributeList(Datamodel? owner)
         {
-            foreach (var binding in Schema.Properties)
+            Attribute_ChangeLock = this;
+
+            var type = GetType();
+            Schema = type == typeof(AttributeList) || type == typeof(Element) ? ElementSchema.Empty : ElementSchema.For(type);
+
+            Owner = owner;
+        }
+
+        internal class DebugView
+        {
+            public DebugView(AttributeList item)
             {
-                var name = useSerializationName ? binding.AttributeName : binding.PropertyName;
-                yield return new Attribute(name, this, binding.GetValue(this));
+                Item = item;
+            }
+            [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+            protected AttributeList Item;
+
+            [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
+            public DebugAttribute[] Attributes
+                => Item.Schema.Properties.Select(binding => new DebugAttribute(binding.PropertyName, binding.GetValue(Item)))
+                .Concat(Item.Select(attr => new DebugAttribute(attr.Key, attr.Value)))
+                .ToArray();
+
+            [DebuggerDisplay("{Value}", Name = "{Name,nq}")]
+            public class DebugAttribute(string name, object? value)
+            {
+                [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+                public string Name { get; } = name;
+
+                [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
+                public object? Value { get; } = value;
+            }
+        }
+
+        /// <summary>
+        /// Contains the names of Datamodel types which are functionally identical to other types and don't have their own CLR representation.
+        /// </summary>
+        public enum OverrideType
+        {
+            /// <summary>
+            /// Maps to <see cref="Vector3"/>.
+            /// </summary>
+            Angle,
+            /// <summary>
+            /// Maps to <see cref="byte[]"/>.
+            /// </summary>
+            Binary,
+        }
+
+        /// <summary>
+        /// Gets the <see cref="Datamodel"/> that this AttributeList is owned by.
+        /// </summary>
+        public virtual Datamodel? Owner { get; internal set; }
+
+        #region Slots
+
+        /// <summary>
+        /// Returns the index of the attribute with the given name, or -1. Names of attributes read from a file are usually the same string instance as the query, which the first comparison catches.
+        /// </summary>
+        int Find(string name)
+        {
+            var slots = this.slots;
+            for (var i = 0; i < count; i++)
+            {
+                var candidate = slots![i].Name;
+                if (ReferenceEquals(candidate, name) || candidate == name)
+                    return i;
+            }
+
+            return -1;
+        }
+
+        /// <summary>
+        /// Adds an empty slot with the given name at the end. The caller holds the lock.
+        /// </summary>
+        ref AttributeSlot Append(string name)
+        {
+            if (slots == null || count == slots.Length)
+                System.Array.Resize(ref slots, Math.Max(4, count * 2));
+
+            ref var slot = ref slots[count++];
+            slot = default;
+            slot.Name = name;
+            return ref slot;
+        }
+
+        /// <summary>
+        /// Adds an empty slot with the given name at the given index. The caller holds the lock.
+        /// </summary>
+        ref AttributeSlot InsertAt(int index, string name)
+        {
+            ArgumentOutOfRangeException.ThrowIfGreaterThan((uint)index, (uint)count, nameof(index));
+
+            Append(name);
+            if (index < count - 1)
+            {
+                System.Array.Copy(slots!, index, slots!, index + 1, count - 1 - index);
+                slots![index] = default;
+                slots[index].Name = name;
+            }
+
+            return ref slots![index];
+        }
+
+        void RemoveSlot(int index)
+        {
+            count--;
+            if (index < count)
+                System.Array.Copy(slots!, index + 1, slots!, index, count - index);
+
+            slots![count] = default;
+        }
+
+        static AttributeKind KindOf<T>() where T : unmanaged
+        {
+            if (typeof(T) == typeof(int)) return AttributeKind.Int;
+            if (typeof(T) == typeof(float)) return AttributeKind.Float;
+            if (typeof(T) == typeof(bool)) return AttributeKind.Bool;
+            if (typeof(T) == typeof(byte)) return AttributeKind.Byte;
+            if (typeof(T) == typeof(ulong)) return AttributeKind.UInt64;
+            if (typeof(T) == typeof(TimeSpan)) return AttributeKind.Time;
+            if (typeof(T) == typeof(Color)) return AttributeKind.Color;
+            if (typeof(T) == typeof(Vector2)) return AttributeKind.Vector2;
+            if (typeof(T) == typeof(Vector3)) return AttributeKind.Vector3;
+            if (typeof(T) == typeof(Vector4)) return AttributeKind.Vector4;
+            if (typeof(T) == typeof(Quaternion)) return AttributeKind.Quaternion;
+            if (typeof(T) == typeof(QAngle)) return AttributeKind.QAngle;
+            return AttributeKind.Reference;
+        }
+
+        static void WriteInline<T>(ref AttributeSlot slot, AttributeKind kind, T value) where T : unmanaged
+        {
+            slot.Kind = kind;
+            slot.Reference = null;
+            slot.Offset = 0;
+            slot.Inline = default;
+            Unsafe.As<InlineValue, T>(ref slot.Inline) = value;
+        }
+
+        /// <summary>
+        /// Stores a boxed value in a slot, taking ownership of elements and element arrays the way Valve's datamodel does.
+        /// </summary>
+        void Store(ref AttributeSlot slot, object? value)
+        {
+            slot.Offset = 0;
+
+            switch (value)
+            {
+                case null:
+                    slot.Kind = AttributeKind.Reference;
+                    slot.Reference = null;
+                    return;
+                case int v: WriteInline(ref slot, AttributeKind.Int, v); return;
+                case float v: WriteInline(ref slot, AttributeKind.Float, v); return;
+                case bool v: WriteInline(ref slot, AttributeKind.Bool, v); return;
+                case byte v: WriteInline(ref slot, AttributeKind.Byte, v); return;
+                case ulong v: WriteInline(ref slot, AttributeKind.UInt64, v); return;
+                case TimeSpan v: WriteInline(ref slot, AttributeKind.Time, v); return;
+                case Color v: WriteInline(ref slot, AttributeKind.Color, v); return;
+                case Vector2 v: WriteInline(ref slot, AttributeKind.Vector2, v); return;
+                case Vector3 v: WriteInline(ref slot, AttributeKind.Vector3, v); return;
+                case Vector4 v: WriteInline(ref slot, AttributeKind.Vector4, v); return;
+                case Quaternion v: WriteInline(ref slot, AttributeKind.Quaternion, v); return;
+                case QAngle v: WriteInline(ref slot, AttributeKind.QAngle, v); return;
+                case Element elem:
+                    if (elem.Owner == null)
+                        elem.Owner = Owner;
+                    else if (elem.Owner != Owner)
+                        throw new ElementOwnershipException();
+                    break;
+                case ElementArray array:
+                    if (array.Owner == null)
+                        array.Owner = this;
+                    else if (array.Owner != this)
+                        throw new InvalidOperationException("ElementArray is already owned by a different Datamodel.");
+                    break;
+                case IEnumerable<Element>:
+                    throw new InvalidOperationException("Element array objects must derive from Datamodel.ElementArray");
+                case string or byte[] or Matrix4x4:
+                    break;
+                default:
+                    if (!Datamodel.IsDatamodelType(value.GetType()))
+                        throw new AttributeTypeException($"{value.GetType().FullName} is not a valid Datamodel attribute type. (If this is an array, it must implement IList<T>).");
+                    break;
+            }
+
+            slot.Kind = AttributeKind.Reference;
+            slot.Reference = value;
+        }
+
+        /// <summary>
+        /// The value as an object, without loading a deferred value or expanding a stub.
+        /// </summary>
+        static object? RawValue(in AttributeSlot slot)
+        {
+            return slot.Kind switch
+            {
+                AttributeKind.Reference => slot.Reference,
+                AttributeKind.Int => slot.Inline.Int,
+                AttributeKind.Float => slot.Inline.Float,
+                AttributeKind.Bool => slot.Inline.Bool,
+                AttributeKind.Byte => slot.Inline.Byte,
+                AttributeKind.UInt64 => slot.Inline.UInt64,
+                AttributeKind.Time => TimeSpan.FromTicks(slot.Inline.Ticks),
+                AttributeKind.Color => slot.Inline.Color,
+                AttributeKind.Vector2 => slot.Inline.Vector2,
+                AttributeKind.Vector3 => slot.Inline.Vector3,
+                AttributeKind.Vector4 => slot.Inline.Vector4,
+                AttributeKind.Quaternion => slot.Inline.Quaternion,
+                AttributeKind.QAngle => slot.Inline.QAngle,
+                _ => throw new InvalidOperationException("Unknown attribute kind."),
+            };
+        }
+
+        /// <summary>
+        /// The value as an object, loading it from the stream if it is deferred and expanding a stub element.
+        /// </summary>
+        /// <exception cref="CodecException">Thrown when deferred value loading fails.</exception>
+        /// <exception cref="DestubException">Thrown when Element destubbing fails.</exception>
+        object? GetValue(int index)
+        {
+            if (slots![index].Offset != 0)
+                LoadDeferred(index);
+
+            ref var slot = ref slots[index];
+
+            if (slot.Kind == AttributeKind.Reference && slot.Reference is Element { Stub: true } stub && Owner != null)
+            {
+                try { slot.Reference = Owner.OnStubRequest(stub.ID) ?? stub; }
+                catch (Exception err) { throw new DestubException(this, slot.Name, err); }
+            }
+
+            return RawValue(in slot);
+        }
+
+        void LoadDeferred(int index)
+        {
+            var codec = Owner?.Codec ?? throw new CodecException("Trying to load a deferred Attribute, but could not find codec.");
+            var offset = slots![index].Offset;
+            var name = slots[index].Name;
+            object? value;
+
+            try
+            {
+                lock (codec)
+                {
+                    value = codec.DeferredDecodeAttribute(Owner, offset);
+                }
+            }
+            catch (Exception err)
+            {
+                throw new CodecException($"Deferred loading of attribute \"{name}\" on element {(this as Element)?.ID} using {codec} codec threw an exception.", err);
+            }
+
+            Store(ref slots[index], value);
+        }
+
+        /// <summary>
+        /// Registers an attribute whose value is read from the stream on first access.
+        /// </summary>
+        internal void SetDeferred(string name, long offset)
+        {
+            lock (Attribute_ChangeLock)
+            {
+                var index = Find(name);
+                ref var slot = ref (index < 0 ? ref Append(name) : ref slots![index]);
+                slot.Kind = AttributeKind.Reference;
+                slot.Reference = null;
+                slot.Override = null;
+                slot.Offset = offset;
+            }
+        }
+
+        /// <summary>
+        /// The reference held by every attribute, without loading deferred values. Value types are skipped, since only elements and arrays matter to callers.
+        /// </summary>
+        internal IEnumerable<object?> EnumerateReferences()
+        {
+            for (var i = 0; i < count; i++)
+                yield return slots![i].Reference;
+        }
+
+        bool HasListeners => CollectionChanged != null || PropertyChanged != null;
+
+        #endregion
+
+        /// <summary>
+        /// Adds a new attribute to this AttributeList.
+        /// </summary>
+        /// <param name="key">The name of the attribute. Must be unique to this AttributeList.</param>
+        /// <param name="value">The value of the Attribute. Must be of a valid Datamodel type.</param>
+        public void Add(string key, object? value)
+        {
+            this[key] = value;
+        }
+
+        /// <summary>
+        /// Sets a value type attribute without boxing it. Any other type is stored through the indexer.
+        /// </summary>
+        public void Set<T>(string name, T value) where T : unmanaged
+        {
+            ArgumentNullException.ThrowIfNull(name);
+
+            var kind = KindOf<T>();
+            if (kind == AttributeKind.Reference || (Schema.Properties.Count > 0 && Schema.GetProperty(name) != null))
+            {
+                this[name] = value;
+                return;
+            }
+
+            if (this is Element { Stub: true })
+                throw new InvalidOperationException("Cannot set attributes on a stub element.");
+
+            lock (Attribute_ChangeLock)
+            {
+                var index = Find(name);
+                if (index < 0)
+                {
+                    WriteInline(ref Append(name), kind, value);
+
+                    if (HasListeners)
+                        OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Add, new AttrKVP(name, value), count - 1));
+                }
+                else
+                {
+                    ref var slot = ref slots![index];
+                    var old = HasListeners ? RawValue(in slot) : null;
+                    slot.Override = null;
+                    WriteInline(ref slot, kind, value);
+
+                    if (HasListeners)
+                        OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Replace, new AttrKVP(name, value), new AttrKVP(name, old), index));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the given atttribute's "override type". This applies when multiple Datamodel types map to the same CLR type.
+        /// </summary>
+        /// <param name="key">The name of the attribute.</param>
+        /// <returns>The attribute's Datamodel type, if different from its CLR type.</returns>
+        public OverrideType? GetOverrideType(string key)
+        {
+            lock (Attribute_ChangeLock)
+            {
+                var index = Find(key);
+                return index < 0 ? null : slots![index].Override;
+            }
+        }
+
+        /// <summary>
+        /// Sets the given attribute's "override type". This applies when multiple Datamodel types map to the same CLR type.
+        /// </summary>
+        /// <param name="key">The name of the attribute.</param>
+        /// <param name="type">The Datamodel type which the attribute should be stored as when written to DMX, or null.</param>
+        /// <exception cref="AttributeTypeException">Thrown when the attribute's CLR type does not map to the value given in <paramref name="type"/>.</exception>
+        public void SetOverrideType(string key, OverrideType? type)
+        {
+            lock (Attribute_ChangeLock)
+            {
+                var index = Find(key);
+                if (index < 0)
+                    return;
+
+                ref var slot = ref slots![index];
+                switch (type)
+                {
+                    case null:
+                        break;
+                    case OverrideType.Angle:
+                        if (slot.Kind != AttributeKind.Vector3)
+                            throw new AttributeTypeException("OverrideType.Angle can only be applied to Vector3 attributes");
+                        break;
+                    case OverrideType.Binary:
+                        if (slot.Reference is not byte[])
+                            throw new AttributeTypeException("OverrideType.Binary can only be applied to byte[] attributes");
+                        break;
+                    default:
+                        throw new NotImplementedException();
+                }
+
+                slot.Override = type;
+            }
+        }
+
+        public bool Remove(string key)
+        {
+            lock (Attribute_ChangeLock)
+            {
+                var index = Find(key);
+                if (index < 0) return false;
+
+                var removed = new AttrKVP(key, RawValue(in slots![index]));
+                RemoveSlot(index);
+                OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, removed, index));
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Gets the value of an attribute without loading it if it is deferred, in which case the value is null.
+        /// </summary>
+        public bool TryGetValue(string key, out object? value)
+        {
+            lock (Attribute_ChangeLock)
+            {
+                var index = Find(key);
+                if (index < 0)
+                {
+                    value = null;
+                    return false;
+                }
+
+                ref var slot = ref slots![index];
+                value = slot.Offset != 0 ? null : RawValue(in slot);
+                return true;
+            }
+        }
+
+        public virtual bool ContainsKey(string key)
+        {
+            ArgumentNullException.ThrowIfNull(key);
+            lock (Attribute_ChangeLock)
+                return Find(key) >= 0;
+        }
+
+        public ICollection<string> Keys
+        {
+            get
+            {
+                lock (Attribute_ChangeLock)
+                {
+                    var keys = new string[count];
+                    for (var i = 0; i < count; i++)
+                        keys[i] = slots![i].Name;
+                    return keys;
+                }
+            }
+        }
+
+        public ICollection<object?> Values
+        {
+            get
+            {
+                var values = new object?[Count];
+                for (var i = 0; i < values.Length; i++)
+                    values[i] = GetValue(i);
+                return values;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the value of the attribute with the given name.
+        /// </summary>
+        /// <param name="name">The name to search for. Cannot be null.</param>
+        /// <returns>The value associated with the given name.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when the value of name is null.</exception>
+        /// <exception cref="KeyNotFoundException">Thrown when an attempt is made to get a name that is not present in this AttributeList.</exception>
+        /// <exception cref="ElementOwnershipException">Thrown when an attempt is made to set the value of the attribute to an Element from a different <see cref="Datamodel"/>.</exception>
+        /// <exception cref="AttributeTypeException">Thrown when an attempt is made to set a value that is not of a valid Datamodel attribute type.</exception>
+        public virtual object? this[string name]
+        {
+            get
+            {
+                ArgumentNullException.ThrowIfNull(name);
+
+                int index;
+                lock (Attribute_ChangeLock)
+                    index = Find(name);
+
+                if (index < 0)
+                {
+                    var binding = Schema.GetProperty(name);
+                    if (binding != null)
+                    {
+                        return binding.GetValue(this);
+                    }
+
+                    throw new KeyNotFoundException($"{this} does not have an attribute called \"{name}\"");
+                }
+
+                return GetValue(index);
+            }
+            set
+            {
+                ArgumentNullException.ThrowIfNull(name);
+
+                // a value that fits a class property is a valid attribute type by construction, so it skips the type table
+                var binding = Schema.Properties.Count > 0 ? Schema.GetProperty(name) : null;
+
+                if (binding != null)
+                {
+                    SetProperty(binding, name, value);
+                    return;
+                }
+
+                if (Owner != null && this == Owner.PrefixAttributes && value?.GetType() == typeof(Element))
+                    throw new AttributeTypeException("Elements are not supported as prefix attributes.");
+
+                lock (Attribute_ChangeLock)
+                {
+                    var index = Find(name);
+                    if (index < 0)
+                    {
+                        Store(ref Append(name), value);
+
+                        if (HasListeners)
+                            OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Add, new AttrKVP(name, value), count - 1));
+                    }
+                    else
+                    {
+                        ref var slot = ref slots![index];
+                        var old = HasListeners ? RawValue(in slot) : null;
+                        slot.Override = null;
+                        Store(ref slot, value);
+
+                        if (HasListeners)
+                            OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Replace, new AttrKVP(name, value), new AttrKVP(name, old), index));
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Assigns a value to the class property that stores the attribute.
+        /// </summary>
+        void SetProperty(PropertyBinding binding, string name, object? value)
+        {
+            if (binding.CanWrite)
+            {
+                // null is fine, it will just set the value to null; an exact type match is the common case and avoids the runtime cast check
+                if (value != null && binding.PropertyType != value.GetType() && !binding.PropertyType.IsInstanceOfType(value))
+                {
+                    value = ConvertScalar(value, binding.PropertyType)
+                        ?? throw new InvalidDataException($"class property '{Schema.ElementType.Name}.{binding.PropertyName}' with type '{binding.PropertyType}' can not hold a value of type '{value.GetType()}' (attribute '{name}'), this is likely a mismatch between the real class and the class from the datamodel");
+                }
+
+                binding.SetValue(this, value);
+                return;
+            }
+
+            // a read-only array property takes the items of an incoming array of the same type, so that a file can fill it once
+            var existingArray = binding.GetValue(this) as IList;
+            var incomingArray = value as IList;
+
+            if (existingArray is not null && incomingArray is not null && existingArray.GetType() == incomingArray.GetType())
+            {
+                if (existingArray.Count == 0)
+                {
+                    foreach (var item in incomingArray)
+                        existingArray.Add(item);
+                }
+                else
+                {
+                    throw new InvalidOperationException($"Attribute '{name}' modifies property {Schema.ElementType.Name}.{binding.PropertyName}, which is read-only and already has items.");
+                }
+            }
+            else
+            {
+                throw new InvalidDataException($"Property '{Schema.ElementType.Name}.{binding.PropertyName}' of deserialisation class must be writeable, make sure it has a setter");
             }
         }
 
@@ -76,282 +693,6 @@ namespace Datamodel
             return null;
         }
 
-        internal class DebugView
-        {
-            public DebugView(AttributeList item)
-            {
-                Item = item;
-            }
-            [DebuggerBrowsable(DebuggerBrowsableState.Never)]
-            protected AttributeList Item;
-
-            [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
-            public DebugAttribute[] Attributes
-                => Item.GetPropertyBasedAttributes(useSerializationName: false).Select(attr => new DebugAttribute(attr))
-                .Concat(Item.Inner.Values.Cast<Attribute>().Select(attr => new DebugAttribute(attr)))
-                .ToArray();
-
-            [DebuggerDisplay("{Value}", Name = "{Attr.Name,nq}", Type = "{Attr.ValueType.FullName,nq}")]
-            public class DebugAttribute
-            {
-                public DebugAttribute(Attribute attr)
-                {
-                    Attr = attr;
-                }
-
-                [DebuggerBrowsable(DebuggerBrowsableState.Never)]
-                readonly Attribute Attr;
-
-                [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
-                object? Value { get { return Attr.Value; } }
-            }
-        }
-
-        /// <summary>
-        /// Contains the names of Datamodel types which are functionally identical to other types and don't have their own CLR representation.
-        /// </summary>
-        public enum OverrideType
-        {
-            /// <summary>
-            /// Maps to <see cref="Vector3"/>.
-            /// </summary>
-            Angle,
-            /// <summary>
-            /// Maps to <see cref="byte[]"/>.
-            /// </summary>
-            Binary,
-        }
-
-        public AttributeList(Datamodel? owner)
-        {
-            var type = GetType();
-            Schema = type == typeof(AttributeList) || type == typeof(Element) ? ElementSchema.Empty : ElementSchema.For(type);
-
-            Inner = [];
-            Owner = owner;
-        }
-
-        /// <summary>
-        /// Gets the <see cref="Datamodel"/> that this AttributeList is owned by.
-        /// </summary>
-        public virtual Datamodel? Owner { get; internal set; }
-
-        /// <summary>
-        /// Adds a new attribute to this AttributeList.
-        /// </summary>
-        /// <param name="key">The name of the attribute. Must be unique to this AttributeList.</param>
-        /// <param name="value">The value of the Attribute. Must be of a valid Datamodel type.</param>
-        public void Add(string key, object? value)
-        {
-            this[key] = value;
-        }
-
-        /// <summary>
-        /// Gets the given atttribute's "override type". This applies when multiple Datamodel types map to the same CLR type.
-        /// </summary>
-        /// <param name="key">The name of the attribute.</param>
-        /// <returns>The attribute's Datamodel type, if different from its CLR type.</returns>
-        /// <exception cref="KeyNotFoundException">Thrown when the given attribute is not present in the list.</exception>
-        public OverrideType? GetOverrideType(string key)
-        {
-            var attrib = Inner[key];
-
-            if (attrib is null)
-            {
-                return null;
-            }
-
-            return ((Attribute)attrib).OverrideType;
-        }
-
-        /// <summary>
-        /// Sets the given attribute's "override type". This applies when multiple Datamodel types map to the same CLR type.
-        /// </summary>
-        /// <param name="key">The name of the attribute.</param>
-        /// <param name="type">The Datamodel type which the attribute should be stored as when written to DMX, or null.</param>
-        /// <exception cref="AttributeTypeException">Thrown when the attribute's CLR type does not map to the value given in <paramref name="type"/>.</exception>
-        public void SetOverrideType(string key, OverrideType? type)
-        {
-            var attrib = Inner[key];
-
-            if (attrib is not null)
-            {
-                ((Attribute)attrib).OverrideType = type;
-            }
-
-        }
-
-        /// <summary>
-        /// Inserts an Attribute at the given index.
-        /// </summary>
-        private void Insert(int index, Attribute item, bool notify = true)
-        {
-            lock (Attribute_ChangeLock)
-            {
-                Inner.Remove(item.Name);
-                Inner.Insert(index, item.Name, item);
-            }
-            item.Owner = this;
-
-            if (notify)
-                OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Add, item.ToKeyValuePair(), index));
-        }
-
-        public bool Remove(string key)
-        {
-            lock (Attribute_ChangeLock)
-            {
-                var attr = (Attribute?)Inner[key];
-                if (attr == null) return false;
-
-                var index = IndexOf(key);
-                Inner.Remove(key);
-                OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, attr.ToKeyValuePair(), index));
-                return true;
-            }
-        }
-
-        public bool TryGetValue(string key, out object? value)
-        {
-            Attribute? result;
-            lock (Attribute_ChangeLock)
-                result = (Attribute?)Inner[key];
-
-            if (result != null)
-            {
-                value = result.RawValue;
-                return true;
-            }
-            else
-            {
-                value = null;
-                return false;
-            }
-        }
-
-        public virtual bool ContainsKey(string key)
-        {
-            ArgumentNullException.ThrowIfNull(key);
-            lock (Attribute_ChangeLock)
-                return Inner[key] != null;
-        }
-        public ICollection<string> Keys
-        {
-            get { lock (Attribute_ChangeLock) return Inner.Keys.Cast<string>().ToArray(); }
-        }
-        public ICollection<object?> Values
-        {
-            get { lock (Attribute_ChangeLock) return Inner.Values.Cast<Attribute>().Select(attr => attr.Value).ToArray(); }
-        }
-
-        /// <summary>
-        /// Gets or sets the value of the <see cref="Attribute"/> with the given name.
-        /// </summary>
-        /// <param name="name">The name to search for. Cannot be null.</param>
-        /// <returns>The value associated with the given name.</returns>
-        /// <exception cref="ArgumentNullException">Thrown when the value of name is null.</exception>
-        /// <exception cref="KeyNotFoundException">Thrown when an attempt is made to get a name that is not present in this AttributeList.</exception>
-        /// <exception cref="ElementOwnershipException">Thrown when an attempt is made to set the value of the attribute to an Element from a different <see cref="Datamodel"/>.</exception>
-        /// <exception cref="AttributeTypeException">Thrown when an attempt is made to set a value that is not of a valid Datamodel attribute type.</exception>
-        /// <exception cref="IndexOutOfRangeException">Thrown when the maximum number of Attributes allowed in an AttributeList has been reached.</exception>        
-        public virtual object? this[string name]
-        {
-            get
-            {
-                ArgumentNullException.ThrowIfNull(name);
-                var attr = (Attribute?)Inner[name];
-                if (attr == null)
-                {
-                    var binding = Schema.GetProperty(name);
-                    if (binding != null)
-                    {
-                        return binding.GetValue(this);
-                    }
-
-                    throw new KeyNotFoundException($"{this} does not have an attribute called \"{name}\"");
-                }
-
-                return attr.Value;
-            }
-            set
-            {
-                ArgumentNullException.ThrowIfNull(name);
-
-                // a value that fits a class property is a valid attribute type by construction, so it skips the type table
-                var binding = Schema.Properties.Count > 0 ? Schema.GetProperty(name) : null;
-
-                if (binding != null)
-                {
-                    if (binding.CanWrite)
-                    {
-                        // null is fine, it will just set the value to null; an exact type match is the common case and avoids the runtime cast check
-                        if (value != null && binding.PropertyType != value.GetType() && !binding.PropertyType.IsInstanceOfType(value))
-                        {
-                            value = ConvertScalar(value, binding.PropertyType)
-                                ?? throw new InvalidDataException($"class property '{Schema.ElementType.Name}.{binding.PropertyName}' with type '{binding.PropertyType}' can not hold a value of type '{value.GetType()}' (attribute '{name}'), this is likely a mismatch between the real class and the class from the datamodel");
-                        }
-
-                        binding.SetValue(this, value);
-                    }
-                    else
-                    {
-                        // a read-only array property takes the items of an incoming array of the same type, so that a file can fill it once
-                        var existingArray = binding.GetValue(this) as IList;
-                        var incomingArray = value as IList;
-
-                        if (existingArray is not null && incomingArray is not null && existingArray.GetType() == incomingArray.GetType())
-                        {
-                            if (existingArray.Count == 0)
-                            {
-                                foreach (var item in incomingArray)
-                                    existingArray.Add(item);
-                            }
-                            else
-                            {
-                                throw new InvalidOperationException($"Attribute '{name}' modifies property {Schema.ElementType.Name}.{binding.PropertyName}, which is read-only and already has items.");
-                            }
-                        }
-                        else
-                        {
-                            throw new InvalidDataException($"Property '{Schema.ElementType.Name}.{binding.PropertyName}' of deserialisation class must be writeable, make sure it has a setter");
-                        }
-                    }
-
-                    return;
-                }
-
-                if (value != null && !Datamodel.IsDatamodelType(value.GetType()))
-                    throw new AttributeTypeException($"{value.GetType().FullName} is not a valid Datamodel attribute type. (If this is an array, it must implement IList<T>).");
-
-                if (Owner != null && this == Owner.PrefixAttributes && value?.GetType() == typeof(Element))
-                    throw new AttributeTypeException("Elements are not supported as prefix attributes.");
-
-                Attribute? old_attr;
-                Attribute? new_attr;
-                int old_index = -1;
-                lock (Attribute_ChangeLock)
-                {
-                    old_attr = (Attribute?)Inner[name];
-                    new_attr = new Attribute(name, this, value);
-
-                    if (old_attr != null)
-                    {
-                        old_index = IndexOf(old_attr.Name);
-                        Inner.Remove(old_attr);
-                    }
-                    Insert(old_index == -1 ? Inner.Count : old_index, new_attr, notify: false);
-                }
-
-                NotifyCollectionChangedEventArgs change_args;
-                if (old_attr != null)
-                    change_args = new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Replace, new_attr.ToKeyValuePair(), old_attr.ToKeyValuePair(), old_index);
-                else
-                    change_args = new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Add, new_attr.ToKeyValuePair(), Count);
-
-                OnCollectionChanged(change_args);
-            }
-        }
-
         /// <summary>
         /// Gets or sets the attribute at the given index.
         /// </summary>
@@ -359,19 +700,17 @@ namespace Datamodel
         {
             get
             {
-                var attr = (Attribute?)Inner[index];
-
-                if (attr is null)
-                {
-                    throw new InvalidOperationException($"attribute at index {index} doesn't exist");
-                }
-
-                return attr.ToKeyValuePair();
+                ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual((uint)index, (uint)count, nameof(index));
+                return new AttrKVP(slots![index].Name, GetValue(index));
             }
             set
             {
-                RemoveAt(index);
-                Insert(index, new Attribute(value.Key, this, value.Value));
+                lock (Attribute_ChangeLock)
+                {
+                    RemoveAt(index);
+                    Store(ref InsertAt(index, value.Key), value.Value);
+                    OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Add, value, index));
+                }
             }
         }
 
@@ -380,32 +719,20 @@ namespace Datamodel
         /// </summary>
         public void RemoveAt(int index)
         {
-            Attribute? attr;
+            AttrKVP removed;
             lock (Attribute_ChangeLock)
             {
-                attr = (Attribute?)Inner[index];
-
-                if (attr is not null)
-                {
-                    attr.Owner = null;
-                    Inner.RemoveAt(index);
-                }
+                ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual((uint)index, (uint)count, nameof(index));
+                removed = new AttrKVP(slots![index].Name, RawValue(in slots[index]));
+                RemoveSlot(index);
             }
-            OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, attr, index));
+            OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, removed, index));
         }
 
         public int IndexOf(string key)
         {
             lock (Attribute_ChangeLock)
-            {
-                int i = 0;
-                foreach (string name in Inner.Keys)
-                {
-                    if (name == key) return i;
-                    i++;
-                }
-            }
-            return -1;
+                return Find(key);
         }
 
         /// <summary>
@@ -414,7 +741,11 @@ namespace Datamodel
         public void Clear()
         {
             lock (Attribute_ChangeLock)
-                Inner.Clear();
+            {
+                if (slots != null)
+                    System.Array.Clear(slots, 0, count);
+                count = 0;
+            }
             OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
         }
 
@@ -423,7 +754,7 @@ namespace Datamodel
             get
             {
                 lock (Attribute_ChangeLock)
-                    return Inner.Count;
+                    return count;
             }
         }
 
@@ -440,8 +771,8 @@ namespace Datamodel
         /// </summary>
         public IEnumerable<AttrKVP> GetAllAttributesForSerialization()
         {
-            foreach (var attr in GetPropertyBasedAttributes(useSerializationName: true))
-                yield return attr.ToKeyValuePair();
+            foreach (var binding in Schema.Properties)
+                yield return new AttrKVP(binding.AttributeName, binding.GetValue(this));
 
             foreach (var attr in this)
                 yield return attr;
@@ -449,8 +780,11 @@ namespace Datamodel
 
         public IEnumerator<AttrKVP> GetEnumerator()
         {
-            foreach (var attr in Inner.Values.Cast<Attribute>().ToArray())
-                yield return attr.ToKeyValuePair();
+            var pairs = new AttrKVP[Count];
+            for (var i = 0; i < pairs.Length; i++)
+                pairs[i] = new AttrKVP(slots![i].Name, GetValue(i));
+
+            return ((IEnumerable<AttrKVP>)pairs).GetEnumerator();
         }
 
         #region Interfaces
@@ -472,13 +806,12 @@ namespace Datamodel
         }
 
         /// <summary>
-        /// Raised when an <see cref="Attribute"/> is added, removed, or replaced.
+        /// Raised when an attribute is added, removed, or replaced.
         /// </summary>
+        /// <remarks>Only raised while a handler is attached to this event or to <see cref="PropertyChanged"/>.</remarks>
         public event NotifyCollectionChangedEventHandler? CollectionChanged;
         protected virtual void OnCollectionChanged(NotifyCollectionChangedEventArgs e)
         {
-            Debug.Assert(!(e.NewItems != null && e.NewItems.OfType<Attribute>().Any()) && !(e.OldItems != null && e.OldItems.OfType<Attribute>().Any()));
-
             switch (e.Action)
             {
                 case NotifyCollectionChangedAction.Add:
@@ -533,10 +866,9 @@ namespace Datamodel
         {
             lock (Attribute_ChangeLock)
             {
-                var attr = (Attribute?)Inner[item.Key];
-                if (attr == null || attr.Value != item.Value) return false;
-                Remove(attr.Name);
-                return true;
+                var index = Find(item.Key);
+                if (index < 0 || !Equals(GetValue(index), item.Value)) return false;
+                return Remove(item.Key);
             }
         }
 
@@ -547,12 +879,11 @@ namespace Datamodel
 
         void ICollection.CopyTo(Array array, int index)
         {
-            lock (Attribute_ChangeLock)
-                foreach (Attribute attr in Inner.Values)
-                {
-                    array.SetValue(attr.ToKeyValuePair(), index);
-                    index++;
-                }
+            foreach (var pair in this)
+            {
+                array.SetValue(pair, index);
+                index++;
+            }
         }
 
         void ICollection<AttrKVP>.Add(AttrKVP item)
@@ -564,8 +895,8 @@ namespace Datamodel
         {
             lock (Attribute_ChangeLock)
             {
-                var attr = (Attribute?)Inner[item.Key];
-                return attr != null && attr.Value == item.Value;
+                var index = Find(item.Key);
+                return index >= 0 && Equals(GetValue(index), item.Value);
             }
         }
 
