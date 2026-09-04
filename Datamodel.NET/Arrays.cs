@@ -57,6 +57,16 @@ namespace Datamodel
 
         public void AddRange(IEnumerable<T> items) => Inner.AddRange(items);
 
+        /// <summary>
+        /// Appends <paramref name="count"/> default items and returns them for the caller to fill, so that a codec can read value types in bulk.
+        /// </summary>
+        internal Span<T> AppendUninitialized(int count)
+        {
+            var start = Inner.Count;
+            System.Runtime.InteropServices.CollectionsMarshal.SetCount(Inner, start + count);
+            return System.Runtime.InteropServices.CollectionsMarshal.AsSpan(Inner).Slice(start, count);
+        }
+
         public void RemoveAt(int index) => Inner.RemoveAt(index);
 
         public virtual T this[int index]

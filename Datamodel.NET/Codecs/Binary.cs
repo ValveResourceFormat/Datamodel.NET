@@ -505,12 +505,40 @@ namespace Datamodel.Codecs
                 var count = reader.ReadInt32();
                 var array = CodecUtilities.MakeList(type, count);
 
+                // value types whose memory layout matches the stream are copied into the list in one read, instead of one boxed item at a time
+                if (BitConverter.IsLittleEndian && count > 0)
+                {
+                    switch (array)
+                    {
+                        case IntArray ints: ReadItems(ints, count, reader); return array;
+                        case FloatArray floats: ReadItems(floats, count, reader); return array;
+                        case BoolArray bools: ReadItems(bools, count, reader); return array;
+                        case Vector2Array vectors: ReadItems(vectors, count, reader); return array;
+                        case Vector3Array vectors: ReadItems(vectors, count, reader); return array;
+                        case Vector4Array vectors: ReadItems(vectors, count, reader); return array;
+                        case QuaternionArray quaternions: ReadItems(quaternions, count, reader); return array;
+                        case MatrixArray matrices: ReadItems(matrices, count, reader); return array;
+                        case ColorArray colors: ReadItems(colors, count, reader); return array;
+                        case ByteArray bytes: ReadItems(bytes, count, reader); return array;
+                        case UInt64Array ulongs: ReadItems(ulongs, count, reader); return array;
+                    }
+                }
+
                 var typeId = TypeMap[type.TypeHandle];
-                foreach (var x in Enumerable.Range(0, count))
+                for (var i = 0; i < count; i++)
                     array.Add(ReadValue(dm, typeId, true, reader));
 
                 return array;
             }
+        }
+
+        /// <summary>
+        /// Reads <paramref name="count"/> items straight into the list's storage. Only for types stored in the stream exactly as in memory.
+        /// </summary>
+        static void ReadItems<T>(Array<T> array, int count, BinaryReader reader) where T : unmanaged
+        {
+            var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(array.AppendUninitialized(count));
+            reader.BaseStream.ReadExactly(bytes);
         }
 
         void SkipAttribute(BinaryReader reader)
