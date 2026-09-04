@@ -82,15 +82,19 @@ namespace Datamodel
 
         bool ICollection<T>.IsReadOnly { get { return false; } }
 
-        public bool IsFixedSize => throw new NotImplementedException();
+        public bool IsFixedSize => false;
 
-        public bool IsReadOnly => throw new NotImplementedException();
+        public bool IsReadOnly => false;
 
-        public bool IsSynchronized => throw new NotImplementedException();
+        public bool IsSynchronized => false;
 
-        public object SyncRoot => throw new NotImplementedException();
+        public object SyncRoot => Inner;
 
-        object? IList.this[int index] { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        object? IList.this[int index]
+        {
+            get => this[index];
+            set => this[index] = value is null ? throw new InvalidOperationException("Trying to set a null object") : (T)value;
+        }
 
         public bool Remove(T item) => Inner.Remove(item);
 
