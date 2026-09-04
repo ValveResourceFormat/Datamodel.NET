@@ -282,17 +282,10 @@ namespace Datamodel
                 {
                     if (prop.CanWrite)
                     {
-                        // were actually fine with this being null, it will just set the value to null
-                        // but need to check so the type check doesn't fail if it is null
-                        if (value != null)
+                        // null is fine, it will just set the value to null
+                        if (value != null && !prop.PropertyType.IsInstanceOfType(value))
                         {
-                            var valueType = value.GetType();
-
-                            // types must be equal, or a superclass
-                            if (prop.PropertyType != typeof(Element) && valueType.IsSubclassOf(prop.PropertyType))
-                            {
-                                throw new InvalidDataException($"class property '{prop.Name}' with type '{prop.PropertyType}' does not match the type '{valueType}' of the value being set, this is likely a mismatch between the real class and the class from the datamodel");
-                            }
+                            throw new InvalidDataException($"class property '{prop.DeclaringType!.Name}.{prop.Name}' with type '{prop.PropertyType}' can not hold a value of type '{value.GetType()}' (attribute '{name}'), this is likely a mismatch between the real class and the class from the datamodel");
                         }
 
                         prop.SetValue(this, value);
@@ -308,16 +301,16 @@ namespace Datamodel
                             if (existingArray.Count == 0)
                             {
                                 existingArray.AddRange(incomingArray);
-                                return;
                             }
                             else
                             {
                                 throw new InvalidOperationException($"Attribute '{name}' modifies property {prop.DeclaringType!.Name}.{prop.Name}, which is write only and can't be replaced.");
                             }
                         }
-
-
-                        throw new InvalidDataException("Property of deserialisation class must be writeable, make sure it's public and has a public setter");
+                        else
+                        {
+                            throw new InvalidDataException($"Property '{prop.DeclaringType!.Name}.{prop.Name}' of deserialisation class must be writeable, make sure it's public and has a public setter");
+                        }
                     }
 
                     return;
@@ -432,6 +425,9 @@ namespace Datamodel
         /// </summary>
         public object SyncRoot { get { return Attribute_ChangeLock; } }
 
+        /// <summary>
+        /// Enumerates every attribute to be written by a codec: class properties first, in declaration order, followed by the plain attributes in the order they were added.
+        /// </summary>
         public IEnumerable<AttrKVP> GetAllAttributesForSerialization()
         {
             foreach (var attr in GetPropertyBasedAttributes(useSerializationName: true))
