@@ -22,6 +22,11 @@ namespace Datamodel.Codecs
         BinaryReader? Reader;
 
         /// <summary>
+        /// Elements in the order the stream declares them. Element references are indices into this list, which must not change for deferred loading.
+        /// </summary>
+        readonly List<Element> ElementIndex = [];
+
+        /// <summary>
         /// The number of Datamodel binary ticks in one second. Used to store TimeSpan values.
         /// </summary>
         const uint DatamodelTicksPerSecond = 10000;
@@ -48,7 +53,8 @@ namespace Datamodel.Codecs
 
         static byte TypeToId(Type type, int version)
         {
-            bool array = Datamodel.IsDatamodelArrayType(type);
+            // a byte[] is a "binary" blob, distinct from a "uint8_array" (Array<byte>) in encoding version 9
+            bool array = type != typeof(byte[]) && Datamodel.IsDatamodelArrayType(type);
             var search_type = array ? Datamodel.GetArrayInnerType(type) : type;
 
             if (array && search_type == typeof(byte) && !SupportedAttributes[version].Contains(typeof(byte)))
@@ -166,6 +172,19 @@ namespace Datamodel.Codecs
                     Scraped = [];
 
                     ScrapeElement(dm.Root);
+
+                    // the prefix attributes are also written as a regular element in version 9
+                    if (EncodingVersion >= 9 && dm.PrefixAttributes.Count > 0)
+                    {
+                        AddString(string.Empty);
+                        AddString(PrefixElementClass);
+                        foreach (var attr in dm.PrefixAttributes)
+                        {
+                            AddString(attr.Key);
+                            if (attr.Value is string stringValue)
+                                AddString(stringValue);
+                        }
+                    }
                 }
             }
 
@@ -322,7 +341,10 @@ namespace Datamodel.Codecs
                 return dm.AllElements[id] ?? new Element(dm, id);
             }
 
-            return dm.AllElements[index];
+            if (index < 0 || index >= ElementIndex.Count)
+                throw new CodecException($"Element index {index} is out of range.");
+
+            return ElementIndex[index];
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -375,8 +397,7 @@ namespace Datamodel.Codecs
 
         public Datamodel Decode(string encoding, int encoding_version, string format, int format_version, Stream stream, DeferredMode defer_mode, ReflectionParams reflectionParams)
         {
-            var elementFactoryTypes = CodecUtilities.GetIElementFactoryClasses();
-            var elementFactory = (IElementFactory)Activator.CreateInstance(elementFactoryTypes.First());
+            var resolver = new ElementTypeResolver(reflectionParams);
 
             stream.Seek(0, SeekOrigin.Begin);
             while (true)
@@ -416,16 +437,18 @@ namespace Datamodel.Codecs
                 var id_bits = Reader.ReadBytes(16);
                 var id = new Guid(BitConverter.IsLittleEndian ? id_bits : id_bits.Reverse().ToArray());
 
-                if (!CodecUtilities.TryConstructCustomElement(elementFactory, reflectionParams, dm, type, name, id, out _))
+                if (!CodecUtilities.TryConstructCustomElement(resolver, dm, type, name, id, out var elem))
                 {
                     // note: constructing an element, adds it to the datamodel.AllElements
-                    _ = new Element(dm, name, id, type);
+                    elem = new Element(dm, name, id, type);
                 }
+
+                ElementIndex.Add(elem!);
             }
 
 
             // read attributes (or not, if we're deferred)
-            foreach (var elem in dm.AllElements.ToArray())
+            foreach (var elem in ElementIndex)
             {
                 // assert if stub
                 Debug.Assert(!elem.Stub);
@@ -447,8 +470,23 @@ namespace Datamodel.Codecs
                 }
             }
 
+            // version 9 also stores the prefix attributes as an unreferenced element right after the root, fold it back in
+            if (EncodingVersion >= 9 && dm.PrefixAttributes.Count > 0 && dm.AllElements.Count > 1)
+            {
+                var duplicate = dm.AllElements[1];
+
+                if (duplicate != null && !duplicate.Stub && duplicate.ClassName == PrefixElementClass && duplicate.Name.Length == 0
+                    && duplicate.Keys.SequenceEqual(dm.PrefixAttributes.Keys))
+                {
+                    dm.PrefixElementId = duplicate.ID;
+                    dm.AllElements.RemoveUnreferenced(duplicate);
+                }
+            }
+
             return dm;
         }
+
+        const string PrefixElementClass = "DmElement";
 
         int EncodingVersion;
 
@@ -553,7 +591,7 @@ namespace Datamodel.Codecs
         readonly struct Encoder
         {
             readonly Dictionary<Element, int> ElementIndices;
-            readonly List<Element> ElementOrder;
+            readonly List<AttributeList> ElementOrder;
             readonly BinaryWriter Writer;
             readonly StringDictionary StringDict;
             readonly Datamodel Datamodel;
@@ -579,20 +617,30 @@ namespace Datamodel.Codecs
                 Writer.Write(string.Format(CodecUtilities.HeaderPattern, "binary", EncodingVersion, Datamodel.Format, Datamodel.FormatVersion) + "\n");
 
                 if (EncodingVersion >= 9)
-                    Writer.Write(0); // Prefix elements
+                {
+                    WritePrefixAttributes();
+                }
 
                 StringDict.WriteSelf(Writer);
 
-                {
-                    var counter = new HashSet<Element>();
-                    var elementCount = CountChildren(Datamodel.Root, counter);
+                var hasPrefixElement = EncodingVersion >= 9 && Datamodel.PrefixAttributes.Count > 0;
+                var elementCount = CountChildren(Datamodel.Root, []) + (hasPrefixElement ? 1 : 0);
+                Writer.Write(elementCount);
 
-                    Writer.Write(elementCount);
+                var root = Datamodel.Root;
+                if (root != null && !root.Stub)
+                {
+                    WriteIndexEntry(root, root.ClassName, root.Name, root.ID);
+
+                    // the prefix attributes are also stored as an unreferenced element right after the root
+                    if (hasPrefixElement)
+                        WriteIndexEntry(Datamodel.PrefixAttributes, PrefixElementClass, string.Empty, Datamodel.PrefixElementId);
+
+                    WriteIndexChildren(root);
                 }
 
-                WriteIndex(Datamodel.Root);
-                foreach (var e in ElementOrder)
-                    WriteBody(e);
+                foreach (var body in ElementOrder)
+                    WriteBody(body);
             }
 
             int CountChildren(Element? elem, HashSet<Element> counter)
@@ -625,16 +673,26 @@ namespace Datamodel.Codecs
 
             void WriteIndex(Element? elem)
             {
-                if (elem is null || elem.Stub) return;
+                if (elem is null || elem.Stub || ElementIndices.ContainsKey(elem)) return;
 
-                ElementIndices[elem] = ElementIndices.Count;
-                ElementOrder.Add(elem);
+                WriteIndexEntry(elem, elem.ClassName, elem.Name, elem.ID);
+                WriteIndexChildren(elem);
+            }
 
-                StringDict.WriteString(elem.ClassName, Writer);
-                if (EncodingVersion >= 4) StringDict.WriteString(elem.Name, Writer);
-                else Writer.Write(elem.Name);
-                Writer.Write(elem.ID.ToByteArray());
+            void WriteIndexEntry(AttributeList body, string className, string name, Guid id)
+            {
+                if (body is Element elem)
+                    ElementIndices[elem] = ElementOrder.Count;
+                ElementOrder.Add(body);
 
+                StringDict.WriteString(className, Writer);
+                if (EncodingVersion >= 4) StringDict.WriteString(name, Writer);
+                else Writer.Write(name);
+                Writer.Write(id.ToByteArray());
+            }
+
+            void WriteIndexChildren(Element elem)
+            {
                 foreach (var attr in Context.Attributes[elem])
                 {
                     var child_elem = attr.Value as Element;
@@ -656,31 +714,63 @@ namespace Datamodel.Codecs
                 }
             }
 
-            void WriteBody(Element elem)
+            /// <summary>
+            /// Prefix attributes are stored as a list of prefix elements, each a list of name/typed value pairs.
+            /// Only the first prefix element is read back, so everything is written into a single one.
+            /// </summary>
+            void WritePrefixAttributes()
             {
-                var attributesIterated = Context.Attributes[elem];
-                //Writer.Write(elem.Count);
+                var prefixAttributes = Datamodel.PrefixAttributes.Where(attr => attr.Value != null).ToArray();
+
+                if (prefixAttributes.Length == 0)
+                {
+                    Writer.Write(0);
+                    return;
+                }
+
+                Writer.Write(1);
+                Writer.Write(prefixAttributes.Length);
+
+                foreach (var attr in prefixAttributes)
+                {
+                    Writer.Write(attr.Key);
+                    WriteTypedValue(attr.Value, raw_string: true);
+                }
+            }
+
+            void WriteBody(AttributeList elem)
+            {
+                var attributesIterated = elem is Element element ? Context.Attributes[element] : elem.GetAllAttributesForSerialization().ToArray();
                 Writer.Write(attributesIterated.Length);
                 foreach (var attr in attributesIterated)
                 {
                     StringDict.WriteString(attr.Key, Writer);
-                    var attr_type = attr.Value == null ? typeof(Element) : attr.Value.GetType();
-                    var attr_type_id = TypeToId(attr_type, EncodingVersion);
-                    Writer.Write(attr_type_id);
-
-                    if (attr.Value == null || !Datamodel.IsDatamodelArrayType(attr.Value.GetType()))
-                        WriteAttribute(attr.Value, false);
-                    else
-                    {
-                        var array = (System.Collections.IList)attr.Value;
-                        Writer.Write(array.Count);
-                        attr_type = Datamodel.GetArrayInnerType(array.GetType());
-                        foreach (var item in array)
-                            WriteAttribute(item, true);
-                    }
+                    WriteTypedValue(attr.Value, raw_string: false);
                 }
             }
 
+            /// <summary>
+            /// Writes the type id of a value followed by the value itself, or by the item count and items for arrays.
+            /// </summary>
+            void WriteTypedValue(object? value, bool raw_string)
+            {
+                var attr_type = value == null ? typeof(Element) : value.GetType();
+                var attr_type_id = TypeToId(attr_type, EncodingVersion);
+                Writer.Write(attr_type_id);
+
+                if (value == null || value is byte[] || !Datamodel.IsDatamodelArrayType(attr_type))
+                {
+                    WriteAttribute(value, raw_string);
+                    return;
+                }
+
+                var array = (System.Collections.IList)value;
+                Writer.Write(array.Count);
+                foreach (var item in array)
+                    WriteAttribute(item, true);
+            }
+
+            /// <param name="in_array">Whether the value is an array item or a prefix attribute, in which case strings are written inline rather than through the dictionary.</param>
             void WriteAttribute(object? value, bool in_array)
             {
                 if (value == null)

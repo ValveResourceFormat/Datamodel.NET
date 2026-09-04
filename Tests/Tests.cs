@@ -362,34 +362,29 @@ namespace Datamodel_Tests
 
             CMapRootElement root = (CMapRootElement)unserialisedVmap.Root;
 
-            Assert.AreEqual(typeof(CMapWorld), root.world.GetType());
+            Assert.AreEqual(typeof(CMapWorld), root.World.GetType());
 
-            var world = root.world;
+            var world = root.World;
 
-            var props = world.children.Where(i => i.ClassName == "CMapEntity").OfType<CMapEntity>().ToList();
+            var props = world.GetChildren<CMapEntity>().ToList();
+            Assert.That(props, Is.Not.Empty);
+            Assert.That(props[0].GetEntityClassName(), Is.Not.Null);
 
-            var prop = props[0];
-            var propclass = prop.ClassName;
-            var proptype = prop.GetType();
-            var entityprop = prop;
-
-
-            var propProperties = props[0].EntityProperties;
-            var classname = propProperties.Get<string>("classname");
-
-            var meshes = world.children.Where(i => i.ClassName == "CMapMesh").OfType<CMapMesh>().ToList();
+            var meshes = world.GetChildren<CMapMesh>().ToList();
             var mesh = meshes[0];
 
-            var vertexData = mesh.meshData.vertexData;
+            var vertexData = mesh.MeshData.VertexData;
 
-            Assert.AreEqual(vertexData.size, 8);
-            Assert.AreEqual(vertexData.streams[0]["semanticName"], "position");
+            Assert.AreEqual(vertexData.Size, 8);
+            Assert.AreEqual(vertexData.Streams[0]["semanticName"], "position");
 
-            var typedPolygonMeshData = (CDmePolygonMeshDataStream)vertexData.streams[0];
-            Assert.AreEqual(typedPolygonMeshData.semanticName, "position");
+            var typedPolygonMeshData = (CDmePolygonMeshDataStream)vertexData.Streams[0];
+            Assert.AreEqual(typedPolygonMeshData.SemanticName, "position");
 
-            var typedPolygonMeshDataStream = typedPolygonMeshData.data as Vector3Array;
+            var typedPolygonMeshDataStream = typedPolygonMeshData.Data as Vector3Array;
             Assert.IsNotNull(typedPolygonMeshDataStream);
+            Assert.That(vertexData.GetStreamData<Vector3>("position"), Is.SameAs(typedPolygonMeshDataStream));
+            Assert.That(mesh.MeshData.FaceVertexData.GetStreamData<Vector3>("normal"), Is.Not.Null);
 
             Assert.That(unserialisedVmap.PrefixAttributes["map_asset_references"], Is.Not.Empty);
 
@@ -409,7 +404,6 @@ namespace Datamodel_Tests
 
                 Assert.That(elem, Is.Not.TypeOf<Element>(), $"Found object {elem.ID} {elem.ClassName} that is still an Element type.");
             }
-
         }
 
         [Test]

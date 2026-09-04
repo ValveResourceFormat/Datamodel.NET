@@ -49,6 +49,77 @@ namespace Datamodel.Codecs
 
         public string Assembly = string.Empty;
         public string Namespace = string.Empty;
+
+        /// <summary>
+        /// Assembly of the root type passed to Load. Its generated <see cref="IElementFactory"/> is asked first.
+        /// </summary>
+        public Assembly? RootAssembly;
+    }
+
+    /// <summary>
+    /// Resolves element class names to <see cref="Element"/> subclasses while decoding, through the
+    /// <see cref="IElementFactory"/> classes the ElementFactoryGenerator emits into every assembly that references this library.
+    /// </summary>
+    /// <remarks>
+    /// Every factory in the process is consulted, the one generated into the root type's own assembly first. Each factory only knows
+    /// the assemblies its compilation referenced, and this library's own factory knows nothing, so stopping at the first one found
+    /// would depend on assembly load order.
+    /// </remarks>
+    public sealed class ElementTypeResolver
+    {
+        private const string GeneratedFactoryTypeName = "ElementFactory";
+
+        private readonly ReflectionParams reflectionParams;
+        private readonly List<IElementFactory> factories = [];
+
+        public ElementTypeResolver(ReflectionParams reflectionParams)
+        {
+            this.reflectionParams = reflectionParams;
+
+            if (!reflectionParams.AttemptReflection)
+            {
+                return;
+            }
+
+            var factoryTypes = new List<Type>();
+
+            if (reflectionParams.RootAssembly?.GetType(GeneratedFactoryTypeName) is Type rootFactory)
+            {
+                factoryTypes.Add(rootFactory);
+            }
+
+            foreach (var factoryType in CodecUtilities.GetIElementFactoryClasses())
+            {
+                if (!factoryTypes.Contains(factoryType))
+                {
+                    factoryTypes.Add(factoryType);
+                }
+            }
+
+            foreach (var factoryType in factoryTypes)
+            {
+                if (Activator.CreateInstance(factoryType) is IElementFactory factory)
+                {
+                    factories.Add(factory);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Constructs a new, unowned instance of the class registered for the given element class name, or null when no factory knows it.
+        /// </summary>
+        public Element? Construct(string className)
+        {
+            foreach (var factory in factories)
+            {
+                if (factory.GetClass(reflectionParams.Assembly, reflectionParams.Namespace, className) is Element element)
+                {
+                    return element;
+                }
+            }
+
+            return null;
+        }
     }
 
 
@@ -191,9 +262,13 @@ namespace Datamodel.Codecs
             elem.Add(key, offset);
         }
 
-        public static bool TryConstructCustomElement(IElementFactory elementFactory, ReflectionParams reflectionParams, Datamodel dataModel, string elem_class, string elem_name, Guid elem_id, out Element? elem)
+        /// <summary>
+        /// Constructs an element of the subclass registered for <paramref name="elem_class"/> and adds it to the Datamodel.
+        /// </summary>
+        /// <returns>False when no subclass is registered for the class name, in which case a plain <see cref="Element"/> should be used.</returns>
+        public static bool TryConstructCustomElement(ElementTypeResolver resolver, Datamodel dataModel, string elem_class, string elem_name, Guid elem_id, out Element? elem)
         {
-            elem = (Element?)elementFactory.GetClass(reflectionParams.Assembly, reflectionParams.Namespace, elem_class);
+            elem = resolver.Construct(elem_class);
 
             if (elem is null)
             {
@@ -201,16 +276,21 @@ namespace Datamodel.Codecs
             }
 
             elem.ID = elem_id;
-            elem.Owner = dataModel;
             elem.Name = elem_name;
             elem.ClassName = elem_class;
+            elem.Owner = dataModel;
 
             return true;
         }
 
-        public static IEnumerable<Type?> GetIElementFactoryClasses()
+        private static Type[]? elementFactoryClasses;
+
+        /// <summary>
+        /// Finds every <see cref="IElementFactory"/> implementation in the loaded assemblies. The result is cached after the first call.
+        /// </summary>
+        public static IEnumerable<Type> GetIElementFactoryClasses()
         {
-            return AppDomain.CurrentDomain.GetAssemblies()
+            elementFactoryClasses ??= AppDomain.CurrentDomain.GetAssemblies()
                 .SelectMany(assembly =>
                 {
                     try
@@ -219,12 +299,15 @@ namespace Datamodel.Codecs
                     }
                     catch (ReflectionTypeLoadException ex)
                     {
-                        return ex.Types.Where(t => t != null);
+                        return ex.Types.OfType<Type>();
                     }
                 })
                 .Where(type => type.IsClass &&
                       !type.IsAbstract &&
-                      type.GetInterfaces().Contains(typeof(IElementFactory)));
+                      type.GetInterfaces().Contains(typeof(IElementFactory)))
+                .ToArray();
+
+            return elementFactoryClasses;
         }
     }
 
