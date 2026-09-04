@@ -576,6 +576,12 @@ namespace Datamodel
         }
 
         /// <summary>
+        /// Gets or sets the ID under which <see cref="PrefixAttributes"/> are stored when the encoding also writes them as an element,
+        /// as "keyvalues2" and "binary" version 9 do. Preserved across a load and save cycle.
+        /// </summary>
+        public Guid PrefixElementId { get; set; } = Guid.NewGuid();
+
+        /// <summary>
         /// Gets all Elements owned by this Datamodel. Only Elements which are referenced by the Root element or one of its children are actually considered part of the Datamodel.
         /// </summary>
         public ElementList AllElements
