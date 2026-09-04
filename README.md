@@ -39,6 +39,25 @@ class CMapRootElement : Element
 * Binary codec supports just-in-time attribute loading
 * Write your own codecs with the `ICodec` interface
 * Serialize and deserialize support for Datamodel.Element subclasses
+* Prefix attributes (such as the `map_asset_references` of a vmap) survive a load and save cycle in both encodings
+* Output laid out like Valve's own serializers: `binary` 9 stores the prefix attributes as an element right after the root, `keyvalues2` uses tab indentation and one array item per line
+
+## Typed elements
+
+`Datamodel.Load<T>` gives every element whose class name matches a subclass of `Element` in the namespace of `T` that subclass.
+Elements with no matching class are loaded as plain `Element`s.
+
+How the classes are found:
+
+* The `KeyValues2.ElementFactoryGenerator` source generator emits an `ElementFactory` into every assembly that references this package.
+* Loading asks those factories, the one in the assembly of `T` first. No reflection over types happens at load time.
+
+How a subclass maps onto the file:
+
+* Every public property is an attribute. The attribute name is the property name, adjusted by `[LowercaseProperties]`, `[CamelCaseProperties]` or `[DMProperty]`.
+* Attributes of the file that no property claims are kept as plain attributes and written back unchanged.
+* Every property is always written, like in Valve's datamodel. Loading an older file through a class with newer properties adds those with their default values.
+* Assigning a file attribute to a property of an incompatible type throws an `InvalidDataException` naming the property, which usually means the class does not match the format.
 
 ## Serialization
 
