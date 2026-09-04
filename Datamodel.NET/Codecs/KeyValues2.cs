@@ -49,26 +49,18 @@ namespace Datamodel.Codecs
         }
 
         #region Encode
+        /// <summary>
+        /// Writes lines with tab indentation and LF line endings, as the reference serializer does.
+        /// </summary>
         class KV2Writer : IDisposable
         {
-            public int Indent
-            {
-                get { return indent_count; }
-                set
-                {
-                    indent_count = value;
-                    indent_string = Context.GetIndentation(value);
-                }
-            }
-            int indent_count = 0;
-            string indent_string = "\n";
-            readonly TextWriter Output;
-            readonly SerializationContext Context;
+            public int Indent { get; set; }
 
-            public KV2Writer(Stream output, SerializationContext context)
+            readonly TextWriter Output;
+
+            public KV2Writer(Stream output)
             {
                 Output = new StreamWriter(output, Datamodel.TextEncoding);
-                Context = context;
             }
 
             public void Dispose()
@@ -76,7 +68,7 @@ namespace Datamodel.Codecs
                 Output.Dispose();
             }
 
-            static string Sanitise(string value)
+            public static string Sanitise(string value)
             {
                 return value
                     .Replace("\\", "\\\\")
@@ -86,47 +78,20 @@ namespace Datamodel.Codecs
                     .Replace("\t", "\\t");
             }
 
-            /// <summary>
-            /// Writes the string straight to the output steam, with no sanitisation.
-            /// </summary>
-            public void Write(string value)
-            {
-                Output.Write(value);
-            }
+            public static string Token(string value) => "\"" + Sanitise(value) + "\"";
 
-            public void WriteTokens(params string[] values)
+            public void WriteLine(string line)
             {
-                Output.Write('"' + string.Join("\" \"", values.Select(s => Sanitise(s))) + '"');
+                for (var i = 0; i < Indent; i++)
+                    Output.Write('\t');
+
+                Output.Write(line);
+                Output.Write('\n');
             }
 
             public void WriteLine()
             {
-                Output.Write(indent_string);
-            }
-
-            /// <summary>
-            /// Writes a new line followed by the given value
-            /// </summary>
-            public void WriteLine(string value)
-            {
-                WriteLine();
-                Output.Write(value);
-            }
-
-            public void WriteTokenLine(params string[] values)
-            {
-                Output.Write(indent_string);
-                WriteTokens(values);
-            }
-
-            public void TrimEnd(int count)
-            {
-                if (count > 0)
-                {
-                    Output.Flush();
-                    var stream = ((StreamWriter)Output).BaseStream;
-                    stream.SetLength(stream.Length - count);
-                }
+                Output.Write('\n');
             }
 
             public void Flush()
@@ -135,8 +100,8 @@ namespace Datamodel.Codecs
             }
         }
 
-        // Multi-referenced elements are written out as a separate block at the end of the file.
-        // In-line only the id is written.
+        // Elements referenced more than once are written as separate blocks after the root and referred to by id.
+        // Elements referenced once are written inline.
         Dictionary<Element, int> ReferenceCount = [];
         SerializationContext Context = new();
 
@@ -172,209 +137,178 @@ namespace Datamodel.Codecs
             }
         }
 
-        void WriteAttribute(string name, int encodingVersion, Type type, object value, bool in_array, KV2Writer writer)
+        static string FormatFloat(float value)
         {
-            bool is_element = type == typeof(Element) || type.IsSubclassOf(typeof(Element));
+            // ten decimals with trailing zeros dropped, as the reference serializer prints them
+            return ((double)value).ToString("0.##########", CultureInfo.InvariantCulture);
+        }
 
-            Type? inner_type = null;
-            if (!in_array)
+        static string FormatFloats(params float[] values)
+        {
+            return string.Join(" ", values.Select(FormatFloat));
+        }
+
+        static string FormatValue(object value)
+        {
+            return value switch
             {
-                // TODO: subclass check in this method like above - and in all other places with == typeof(Element)
-                inner_type = Datamodel.GetArrayInnerType(type);
+                string stringValue => stringValue,
+                bool boolValue => boolValue ? "1" : "0",
+                int intValue => intValue.ToString(CultureInfo.InvariantCulture),
+                float floatValue => FormatFloat(floatValue),
+                byte byteValue => byteValue.ToString(CultureInfo.InvariantCulture),
+                ulong ulongValue => "0x" + ulongValue.ToString("x", CultureInfo.InvariantCulture),
+                byte[] binaryValue => Convert.ToHexString(binaryValue),
+                TimeSpan timeValue => FormatFloat((float)timeValue.TotalSeconds),
+                Color colorValue => FormattableString.Invariant($"{colorValue.R} {colorValue.G} {colorValue.B} {colorValue.A}"),
+                Vector2 v => FormatFloats(v.X, v.Y),
+                Vector3 v => FormatFloats(v.X, v.Y, v.Z),
+                Vector4 v => FormatFloats(v.X, v.Y, v.Z, v.W),
+                Quaternion q => FormatFloats(q.X, q.Y, q.Z, q.W),
+                QAngle a => FormatFloats(a.Pitch, a.Yaw, a.Roll),
+                Matrix4x4 m => FormatFloats(m.M11, m.M12, m.M13, m.M14, m.M21, m.M22, m.M23, m.M24, m.M31, m.M32, m.M33, m.M34, m.M41, m.M42, m.M43, m.M44),
+                _ => throw new CodecException($"Cannot serialize a value of type {value.GetType().Name} to KeyValues2"),
+            };
+        }
 
-                if (inner_type == typeof(byte) && type == typeof(byte[]))
-                    inner_type = null; // serialize as binary at all times
+        void WriteAttribute(string name, int encodingVersion, object? value, KV2Writer writer)
+        {
+            var nameToken = KV2Writer.Token(name);
 
-                /*
-                if (inner_type == typeof(byte) && !ValidAttributes[EncodingVersion].Contains(typeof(byte)))
-                    inner_type = null; // fall back on the "binary" type in older KV2 versions
-                */
-            }
-
-            // Elements are supported by all.
-            if (!is_element && !ValidAttributes[encodingVersion].Contains(inner_type ?? type))
-                throw new CodecException(type.Name + " is not valid in KeyValues2 " + encodingVersion);
-
-            if (inner_type != null)
+            if (value is null || value is Element)
             {
-                is_element = inner_type == typeof(Element);
-
-                writer.WriteTokenLine(name, TypeNames[inner_type] + "_array");
-
-                if (((System.Collections.IList)value).Count == 0)
-                {
-                    writer.Write(" [ ]");
-                    return;
-                }
-
-                if (is_element) writer.WriteLine("[");
-                else writer.Write(" [");
-
-                writer.Indent++;
-                foreach (var array_value in (System.Collections.IList)value)
-                    WriteAttribute(string.Empty, encodingVersion, inner_type, array_value, true, writer);
-                writer.Indent--;
-                writer.TrimEnd(1); // remove trailing comma
-
-                if (inner_type == typeof(Element)) writer.WriteLine("]");
-                else writer.Write(" ]");
+                WriteElementAttribute(nameToken, encodingVersion, (Element?)value, writer);
                 return;
             }
 
-            if (is_element)
+            var type = value.GetType();
+
+            // a byte[] is always serialized as "binary", never as a uint8_array
+            var innerType = type == typeof(byte[]) ? null : Datamodel.GetArrayInnerType(type);
+
+            if (innerType != null)
             {
-                var elem = (Element)value;
-                var id = elem.ID.ToString();
+                if (!ValidAttributes[encodingVersion].Contains(innerType))
+                    throw new CodecException(innerType.Name + " is not valid in KeyValues2 " + encodingVersion);
 
-                if (in_array)
-                {
-                    if (ShouldBeReferenced(elem))
-                    {
-                        writer.WriteTokenLine("element", id);
-                    }
-                    else
-                    {
-                        writer.WriteLine();
-                        WriteElement(elem, encodingVersion, writer);
-                    }
-
-                    writer.Write(",");
-                }
-                else
-                {
-                    if (ShouldBeReferenced(elem))
-                    {
-                        writer.WriteTokenLine(name, "element", id);
-                    }
-                    else
-                    {
-                        writer.WriteLine($"\"{name}\" ");
-                        WriteElement(elem, encodingVersion, writer);
-                    }
-                }
-            }
-            else
-            {
-                if (type == typeof(bool))
-                    value = (bool)value ? 1 : 0;
-                else if (type == typeof(float))
-                    value = FormattableString.Invariant($"{(float)value}");
-                else if (type == typeof(byte[]))
-                    value = Convert.ToHexString((byte[])value).Replace("-", string.Empty, false, CultureInfo.InvariantCulture);
-                else if (type == typeof(TimeSpan))
-                    value = ((TimeSpan)value).TotalSeconds.ToString(CultureInfo.InvariantCulture);
-                else if (type == typeof(Color))
-                {
-                    var castValue = (Color)value;
-                    value = FormattableString.Invariant($"{castValue.R} {castValue.G} {castValue.B} {castValue.A}");
-                }
-                else if (value is ulong ulong_value)
-                    value = $"0x{ulong_value.ToString("x", CultureInfo.InvariantCulture)}";
-                else if (type == typeof(Vector2))
-                {
-                    var castValue = (Vector2)value;
-                    value = FormattableString.Invariant($"{castValue.X} {castValue.Y}");
-                }
-                else if (type == typeof(Vector3))
-                {
-                    var castValue = (Vector3)value;
-                    value = FormattableString.Invariant($"{castValue.X} {castValue.Y} {castValue.Z}");
-                }
-                else if (type == typeof(Vector4))
-                {
-                    var castValue = (Vector4)value;
-                    value = FormattableString.Invariant($"{castValue.X} {castValue.Y} {castValue.Z} {castValue.W}");
-                }
-                else if (type == typeof(Quaternion))
-                {
-                    var castValue = (Quaternion)value;
-                    value = FormattableString.Invariant($"{castValue.X} {castValue.Y} {castValue.Z} {castValue.W}");
-                }
-                else if (type == typeof(Matrix4x4))
-                {
-                    var castValue = (Matrix4x4)value;
-                    value =
-                        FormattableString.Invariant($"{castValue.M11} {castValue.M12} {castValue.M13} {castValue.M14}") +
-                        FormattableString.Invariant($" {castValue.M21} {castValue.M22} {castValue.M23} {castValue.M24}") +
-                        FormattableString.Invariant($" {castValue.M31} {castValue.M32} {castValue.M33} {castValue.M34}") +
-                        FormattableString.Invariant($" {castValue.M41} {castValue.M42} {castValue.M43} {castValue.M44}");
-                }
-                else if (value is QAngle castValue)
-                {
-                    value = FormattableString.Invariant($"{castValue.Pitch} {castValue.Yaw} {castValue.Roll}");
-                }
-
-                if (in_array)
-                    writer.Write(FormattableString.Invariant($" \"{value}\","));
-                else
-                    writer.WriteTokenLine(name, TypeNames[type], FormattableString.Invariant($"{value}"));
+                WriteArrayAttribute(nameToken, encodingVersion, innerType, (IList)value, writer);
+                return;
             }
 
+            if (!ValidAttributes[encodingVersion].Contains(type))
+                throw new CodecException(type.Name + " is not valid in KeyValues2 " + encodingVersion);
+
+            writer.WriteLine($"{nameToken} {KV2Writer.Token(TypeNames[type])} {KV2Writer.Token(FormatValue(value))}");
         }
 
-        private bool ShouldBeReferenced(Element? elem)
+        void WriteElementAttribute(string nameToken, int encodingVersion, Element? elem, KV2Writer writer)
         {
-            if (elem is null)
+            if (elem is null || ShouldBeReferenced(elem))
             {
-                return false;
+                writer.WriteLine($"{nameToken} \"element\" \"{(elem is null ? string.Empty : elem.ID.ToString())}\"");
+                return;
             }
 
-            return SupportsReferenceIds && (elem == null || ReferenceCount.TryGetValue(elem, out var refCount) && refCount > 1);
+            writer.WriteLine($"{nameToken} {KV2Writer.Token(elem.ClassName)}");
+            WriteElementBody(elem, encodingVersion, writer);
+            writer.WriteLine("}");
+
+            // the reference serializer leaves a blank line after an inline element
+            writer.WriteLine();
         }
 
-        void WriteElement(Element element, int encodingVersion, KV2Writer writer)
+        void WriteArrayAttribute(string nameToken, int encodingVersion, Type innerType, IList array, KV2Writer writer)
+        {
+            writer.WriteLine($"{nameToken} {KV2Writer.Token(TypeNames[innerType] + "_array")} ");
+            writer.WriteLine("[");
+            writer.Indent++;
+
+            for (var i = 0; i < array.Count; i++)
+            {
+                var separator = i == array.Count - 1 ? string.Empty : ",";
+                var item = array[i];
+
+                if (innerType == typeof(Element))
+                {
+                    var elem = (Element?)item;
+
+                    if (elem is null || ShouldBeReferenced(elem))
+                    {
+                        writer.WriteLine($"\"element\" \"{(elem is null ? string.Empty : elem.ID.ToString())}\"{separator}");
+                    }
+                    else
+                    {
+                        writer.WriteLine(KV2Writer.Token(elem.ClassName));
+                        WriteElementBody(elem, encodingVersion, writer);
+                        writer.WriteLine("}" + separator);
+                    }
+                }
+                else
+                {
+                    writer.WriteLine(KV2Writer.Token(FormatValue(item!)) + separator);
+                }
+            }
+
+            writer.Indent--;
+            writer.WriteLine("]");
+        }
+
+        private bool ShouldBeReferenced(Element elem)
+        {
+            return SupportsReferenceIds && ReferenceCount.TryGetValue(elem, out var refCount) && refCount > 1;
+        }
+
+        /// <summary>
+        /// Writes the opening brace, id, name and attributes of an element. The caller writes the class name before and the closing brace after.
+        /// </summary>
+        void WriteElementBody(Element element, int encodingVersion, KV2Writer writer)
         {
             if (TypeNames.ContainsValue(element.ClassName))
                 throw new CodecException($"Element {element.ID} uses reserved type name \"{element.ClassName}\"");
-            writer.WriteTokens(element.ClassName);
+
             writer.WriteLine("{");
             writer.Indent++;
 
             if (SupportsReferenceIds)
-                writer.WriteTokenLine("id", "elementid", element.ID.ToString());
+                writer.WriteLine($"\"id\" \"elementid\" \"{element.ID}\"");
 
-            // Skip empty names right now.
             if (!string.IsNullOrEmpty(element.Name))
-            {
-                writer.WriteTokenLine("name", "string", element.Name);
-            }
+                writer.WriteLine($"\"name\" \"string\" {KV2Writer.Token(element.Name)}");
 
             foreach (var attr in Context.Attributes[element])
-            {
-                if (attr.Value != null)
-                    WriteAttribute(attr.Key, encodingVersion, attr.Value.GetType(), attr.Value, false, writer);
-            }
+                WriteAttribute(attr.Key, encodingVersion, attr.Value, writer);
 
             writer.Indent--;
+        }
+
+        void WriteElement(Element element, int encodingVersion, KV2Writer writer)
+        {
+            writer.WriteLine(KV2Writer.Token(element.ClassName));
+            WriteElementBody(element, encodingVersion, writer);
             writer.WriteLine("}");
         }
 
         public void Encode(Datamodel dm, string encoding, int encodingVersion, Stream stream)
         {
             Context = new SerializationContext();
-            var writer = new KV2Writer(stream, Context);
+            var writer = new KV2Writer(stream);
 
             SupportsReferenceIds = encoding != "keyvalues2_noids";
 
-            writer.Write(String.Format(CodecUtilities.HeaderPattern, encoding, encodingVersion, dm.Format, dm.FormatVersion));
-            writer.WriteLine();
+            writer.WriteLine(string.Format(CodecUtilities.HeaderPattern, encoding, encodingVersion, dm.Format, dm.FormatVersion));
 
             ReferenceCount = [];
 
             if (encodingVersion >= 4 && dm.PrefixAttributes.Count > 0)
             {
-                writer.WriteTokens("$prefix_element$");
+                writer.WriteLine("\"$prefix_element$\"");
                 writer.WriteLine("{");
                 writer.Indent++;
-                writer.WriteTokenLine("id", "elementid", dm.PrefixElementId.ToString());
+                writer.WriteLine($"\"id\" \"elementid\" \"{dm.PrefixElementId}\"");
                 foreach (var attr in dm.PrefixAttributes)
-                    if (attr.Value != null)
-                    {
-                        WriteAttribute(attr.Key, encodingVersion, attr.Value.GetType(), attr.Value, false, writer);
-                    }
+                    WriteAttribute(attr.Key, encodingVersion, attr.Value, writer);
                 writer.Indent--;
                 writer.WriteLine("}");
-                writer.WriteLine();
             }
 
             if (SupportsReferenceIds)
@@ -383,8 +317,8 @@ namespace Datamodel.Codecs
             if (dm.Root != null)
             {
                 WriteElement(dm.Root, encodingVersion, writer);
+                writer.WriteLine();
             }
-            writer.WriteLine();
 
             if (SupportsReferenceIds)
             {
@@ -392,7 +326,7 @@ namespace Datamodel.Codecs
                 {
                     if (pair.Key == dm.Root)
                         continue;
-                    writer.WriteLine();
+
                     WriteElement(pair.Key, encodingVersion, writer);
                     writer.WriteLine();
                 }
