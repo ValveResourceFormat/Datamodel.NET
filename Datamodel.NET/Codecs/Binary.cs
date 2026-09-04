@@ -53,7 +53,8 @@ namespace Datamodel.Codecs
 
         static byte TypeToId(Type type, int version)
         {
-            bool array = Datamodel.IsDatamodelArrayType(type);
+            // a byte[] is a "binary" blob, distinct from a "uint8_array" (Array<byte>) in encoding version 9
+            bool array = type != typeof(byte[]) && Datamodel.IsDatamodelArrayType(type);
             var search_type = array ? Datamodel.GetArrayInnerType(type) : type;
 
             if (array && search_type == typeof(byte) && !SupportedAttributes[version].Contains(typeof(byte)))
@@ -758,7 +759,7 @@ namespace Datamodel.Codecs
                 var attr_type_id = TypeToId(attr_type, EncodingVersion);
                 Writer.Write(attr_type_id);
 
-                if (value == null || !Datamodel.IsDatamodelArrayType(attr_type))
+                if (value == null || value is byte[] || !Datamodel.IsDatamodelArrayType(attr_type))
                 {
                     WriteAttribute(value, raw_string);
                     return;
