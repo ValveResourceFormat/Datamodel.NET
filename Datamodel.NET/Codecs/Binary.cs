@@ -390,10 +390,8 @@ namespace Datamodel.Codecs
                 reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
         }
 
-        public Datamodel Decode(string encoding, int encoding_version, string format, int format_version, Stream stream, DeferredMode defer_mode, ReflectionParams reflectionParams)
+        public Datamodel Decode(string encoding, int encoding_version, string format, int format_version, Stream stream, DeferredMode defer_mode, ElementTypeResolver resolver)
         {
-            var resolver = new ElementTypeResolver(reflectionParams);
-
             stream.Seek(0, SeekOrigin.Begin);
             while (true)
             {

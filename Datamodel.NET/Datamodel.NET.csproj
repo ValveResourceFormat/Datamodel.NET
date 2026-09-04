@@ -48,7 +48,9 @@
   </ItemGroup>
 
   <ItemGroup>
-  	<ProjectReference Include="..\ElementFactoryGenerator\ElementFactoryGenerator.csproj" Version="0.2.1" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
+    <!-- the source generator runs on this project and ships inside this package, so consumers get it with the library -->
+    <ProjectReference Include="..\ElementFactoryGenerator\ElementFactoryGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <None Include="..\ElementFactoryGenerator\bin\$(Configuration)\netstandard2.0\ElementFactoryGenerator.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
   </ItemGroup>
 
 </Project>

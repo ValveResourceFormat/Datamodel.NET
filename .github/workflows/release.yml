@@ -23,11 +23,8 @@ jobs:
         dotnet-version: 9.0.x
     - name: Test
       run: dotnet test -c Release
-    # KeyValues2 depends on KeyValues2.ElementFactoryGenerator
     - name: Pack
-      run: |
-        dotnet pack ElementFactoryGenerator/ElementFactoryGenerator.csproj -c Release -o out
-        dotnet pack Datamodel.NET/Datamodel.NET.csproj -c Release -o out
+      run: dotnet pack Datamodel.NET/Datamodel.NET.csproj -c Release -o out
     # Kept next to the push: the issued key is only valid for an hour.
     - name: NuGet login
       uses: NuGet/login@v1

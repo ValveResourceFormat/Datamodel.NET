@@ -9,7 +9,6 @@ using System.Linq;
 using System.Numerics;
 
 using AttrKVP = System.Collections.Generic.KeyValuePair<string, object?>;
-using System.Reflection;
 using System.IO;
 
 namespace Datamodel
@@ -21,26 +20,21 @@ namespace Datamodel
     [DebuggerDisplay("Count = {Count}")]
     public class AttributeList : IDictionary<string, object?>, IDictionary
     {
-        internal OrderedDictionary PropertyInfos;
         internal OrderedDictionary Inner;
         protected object Attribute_ChangeLock = new();
 
-        private ICollection<Attribute> GetPropertyBasedAttributes(bool useSerializationName)
-        {
-            var result = new List<Attribute>();
-            foreach (DictionaryEntry entry in PropertyInfos)
-            {
-                if (entry.Value is null)
-                {
-                    throw new InvalidDataException("Property value can not be null");
-                }
+        /// <summary>
+        /// Gets the properties of this class that are stored as attributes. Empty unless a schema is registered for the class.
+        /// </summary>
+        public ElementSchema Schema { get; }
 
-                var prop = (PropertyInfo)entry.Value;
-                var name = useSerializationName ? (string)entry.Key : prop.Name;
-                var attr = new Attribute(name, this, prop.GetValue(this));
-                result.Add(attr);
+        private IEnumerable<Attribute> GetPropertyBasedAttributes(bool useSerializationName)
+        {
+            foreach (var binding in Schema.Properties)
+            {
+                var name = useSerializationName ? binding.AttributeName : binding.PropertyName;
+                yield return new Attribute(name, this, binding.GetValue(this));
             }
-            return result;
         }
 
         /// <summary>
@@ -128,34 +122,13 @@ namespace Datamodel
             Binary,
         }
 
-        /// <summary>
-        /// Cache of the read-only <see cref="PropertyInfos"/> shared by every instance of a given type. The contents
-        /// only depend on the type, so building one per instance is pure overhead when many are created at once.
-        /// </summary>
-        static readonly ConcurrentDictionary<Type, OrderedDictionary> PropertyInfoCache = new();
-
         public AttributeList(Datamodel? owner)
         {
-            PropertyInfos = PropertyInfoCache.TryGetValue(GetType(), out var cached) ? cached : CachePropertyInfos();
+            var type = GetType();
+            Schema = type == typeof(AttributeList) || type == typeof(Element) ? ElementSchema.Empty : ElementSchema.For(type);
 
             Inner = [];
             Owner = owner;
-        }
-
-        OrderedDictionary CachePropertyInfos()
-        {
-            var propertyAttributes = GetPropertyDerivedAttributeList();
-            var propertyInfos = new OrderedDictionary(propertyAttributes?.Count ?? 0);
-            if (propertyAttributes != null)
-            {
-                foreach (var attr in propertyAttributes)
-                {
-                    propertyInfos.Add(attr.Name, attr.Property);
-                }
-            }
-
-            // Read-only so that the shared instance can't be mutated through one of its owners.
-            return PropertyInfoCache.GetOrAdd(GetType(), propertyInfos.AsReadOnly());
         }
 
         /// <summary>
@@ -171,12 +144,6 @@ namespace Datamodel
         public void Add(string key, object? value)
         {
             this[key] = value;
-        }
-
-
-        protected virtual ICollection<(string Name, PropertyInfo Property)>? GetPropertyDerivedAttributeList()
-        {
-            return null;
         }
 
         /// <summary>
@@ -295,10 +262,10 @@ namespace Datamodel
                 var attr = (Attribute?)Inner[name];
                 if (attr == null)
                 {
-                    var prop_attr = (PropertyInfo?)PropertyInfos[name];
-                    if (prop_attr != null)
+                    var binding = Schema.GetProperty(name);
+                    if (binding != null)
                     {
-                        return prop_attr.GetValue(this);
+                        return binding.GetValue(this);
                     }
 
                     throw new KeyNotFoundException($"{this} does not have an attribute called \"{name}\"");
@@ -315,41 +282,42 @@ namespace Datamodel
                 if (Owner != null && this == Owner.PrefixAttributes && value?.GetType() == typeof(Element))
                     throw new AttributeTypeException("Elements are not supported as prefix attributes.");
 
-                var prop = (PropertyInfo?)PropertyInfos[name];
+                var binding = Schema.GetProperty(name);
 
-                if (prop != null)
+                if (binding != null)
                 {
-                    if (prop.CanWrite)
+                    if (binding.CanWrite)
                     {
                         // null is fine, it will just set the value to null
-                        if (value != null && !prop.PropertyType.IsInstanceOfType(value))
+                        if (value != null && !binding.PropertyType.IsInstanceOfType(value))
                         {
-                            value = ConvertScalar(value, prop.PropertyType)
-                                ?? throw new InvalidDataException($"class property '{prop.DeclaringType!.Name}.{prop.Name}' with type '{prop.PropertyType}' can not hold a value of type '{value.GetType()}' (attribute '{name}'), this is likely a mismatch between the real class and the class from the datamodel");
+                            value = ConvertScalar(value, binding.PropertyType)
+                                ?? throw new InvalidDataException($"class property '{Schema.ElementType.Name}.{binding.PropertyName}' with type '{binding.PropertyType}' can not hold a value of type '{value.GetType()}' (attribute '{name}'), this is likely a mismatch between the real class and the class from the datamodel");
                         }
 
-                        prop.SetValue(this, value);
+                        binding.SetValue(this, value);
                     }
                     else
                     {
-                        var existingArray = prop.GetValue(this) as Array<Element>;
-                        var incomingArray = value as Array<Element>;
+                        // a read-only array property takes the items of an incoming array of the same type, so that a file can fill it once
+                        var existingArray = binding.GetValue(this) as IList;
+                        var incomingArray = value as IList;
 
-                        if (existingArray is not null && incomingArray is not null)
+                        if (existingArray is not null && incomingArray is not null && existingArray.GetType() == incomingArray.GetType())
                         {
-                            // special case for reflection based deserialization
                             if (existingArray.Count == 0)
                             {
-                                existingArray.AddRange(incomingArray);
+                                foreach (var item in incomingArray)
+                                    existingArray.Add(item);
                             }
                             else
                             {
-                                throw new InvalidOperationException($"Attribute '{name}' modifies property {prop.DeclaringType!.Name}.{prop.Name}, which is write only and can't be replaced.");
+                                throw new InvalidOperationException($"Attribute '{name}' modifies property {Schema.ElementType.Name}.{binding.PropertyName}, which is read-only and already has items.");
                             }
                         }
                         else
                         {
-                            throw new InvalidDataException($"Property '{prop.DeclaringType!.Name}.{prop.Name}' of deserialisation class must be writeable, make sure it's public and has a public setter");
+                            throw new InvalidDataException($"Property '{Schema.ElementType.Name}.{binding.PropertyName}' of deserialisation class must be writeable, make sure it has a setter");
                         }
                     }
 

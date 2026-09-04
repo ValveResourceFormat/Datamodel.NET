@@ -600,10 +600,8 @@ namespace Datamodel.Codecs
             else throw new ArgumentException($"Internal error: ParseValue passed unsupported type: {type}.");
         }
 
-        public Datamodel Decode(string encoding, int encoding_version, string format, int format_version, Stream stream, DeferredMode defer_mode, ReflectionParams reflectionParams)
+        public Datamodel Decode(string encoding, int encoding_version, string format, int format_version, Stream stream, DeferredMode defer_mode, ElementTypeResolver resolver)
         {
-            var resolver = new ElementTypeResolver(reflectionParams);
-
             var dataModel = new Datamodel(format, format_version);
 
             if (encoding == "keyvalues2_noids")

@@ -479,7 +479,7 @@ namespace Datamodel_Tests
 
         public class ElementSubclassing
         {
-            class CustomElement : Element
+            internal class CustomElement : Element
             {
                 public int MyProperty { get; set; } = 1337;
             }
