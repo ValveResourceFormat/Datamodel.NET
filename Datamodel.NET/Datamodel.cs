@@ -8,8 +8,8 @@ using System.Linq;
 using System.Runtime.Serialization;
 using System.Security;
 using System.Numerics;
+using System.Collections.Concurrent;
 using CodecRegistration = System.Tuple<string, int>;
-using System.Reflection;
 
 namespace Datamodel
 {
@@ -58,9 +58,55 @@ namespace Datamodel
         public static Type[] AttributeTypes => attributeTypes;
 
         /// <summary>
+        /// The <see cref="IList{T}"/> interface of every attribute type, paired with T. A type implementing one of these is an array of T.
+        /// </summary>
+        private static readonly (Type List, Type Item)[] arrayInterfaces = [
+            (typeof(IList<Element>), typeof(Element)),
+            (typeof(IList<int>), typeof(int)),
+            (typeof(IList<float>), typeof(float)),
+            (typeof(IList<bool>), typeof(bool)),
+            (typeof(IList<string>), typeof(string)),
+            (typeof(IList<byte[]>), typeof(byte[])),
+            (typeof(IList<TimeSpan>), typeof(TimeSpan)),
+            (typeof(IList<Color>), typeof(Color)),
+            (typeof(IList<Vector2>), typeof(Vector2)),
+            (typeof(IList<Vector3>), typeof(Vector3)),
+            (typeof(IList<Vector4>), typeof(Vector4)),
+            (typeof(IList<Quaternion>), typeof(Quaternion)),
+            (typeof(IList<Matrix4x4>), typeof(Matrix4x4)),
+            (typeof(IList<byte>), typeof(byte)),
+            (typeof(IList<ulong>), typeof(ulong)),
+            (typeof(IList<QAngle>), typeof(QAngle)),
+        ];
+
+        /// <summary>
+        /// The item type of every type that has been checked with <see cref="GetArrayInnerType"/>, or null for types that are not arrays.
+        /// </summary>
+        private static readonly ConcurrentDictionary<Type, Type?> arrayItemTypes = new()
+        {
+            [typeof(ElementArray)] = typeof(Element),
+            [typeof(IntArray)] = typeof(int),
+            [typeof(FloatArray)] = typeof(float),
+            [typeof(BoolArray)] = typeof(bool),
+            [typeof(StringArray)] = typeof(string),
+            [typeof(BinaryArray)] = typeof(byte[]),
+            [typeof(TimeSpanArray)] = typeof(TimeSpan),
+            [typeof(ColorArray)] = typeof(Color),
+            [typeof(Vector2Array)] = typeof(Vector2),
+            [typeof(Vector3Array)] = typeof(Vector3),
+            [typeof(Vector4Array)] = typeof(Vector4),
+            [typeof(QuaternionArray)] = typeof(Quaternion),
+            [typeof(MatrixArray)] = typeof(Matrix4x4),
+            [typeof(ByteArray)] = typeof(byte),
+            [typeof(UInt64Array)] = typeof(ulong),
+            [typeof(Element)] = null,
+            [typeof(string)] = null,
+        };
+
+        /// <summary>
         /// Determines whether the given Type is valid as a Datamodel <see cref="Attribute"/>.
         /// </summary>
-        /// <remarks><see cref="ICollection&lt;T&gt;"/> objects pass if their generic argument is valid.</remarks>
+        /// <remarks><see cref="ICollection{T}"/> objects pass if their generic argument is valid.</remarks>
         /// <seealso cref="IsDatamodelArrayType"/>
         /// <param name="t">The Type to check.</param>
         public static bool IsDatamodelType(Type t)
@@ -76,28 +122,30 @@ namespace Datamodel
         /// <param name="t">The Type to check.</param>
         public static bool IsDatamodelArrayType(Type t)
         {
-            var inner = GetArrayInnerType(t);
-            return inner != null && Datamodel.AttributeTypes.Contains(inner);
+            return GetArrayInnerType(t) != null;
         }
 
         /// <summary>
-        /// Returns the inner Type of an object which implements IList&lt;T&gt;, or null if there is no inner Type.
+        /// Returns the inner Type of an object which implements <see cref="IList{T}"/> for an attribute type T, or null if there is no inner Type.
         /// </summary>
         /// <param name="t">The Type to check.</param>
         public static Type? GetArrayInnerType(Type t)
         {
-            if (t == typeof(Element))
+            if (arrayItemTypes.TryGetValue(t, out var inner))
             {
-                return null;
+                return inner;
             }
 
-            var i_type = t.IsGenericType && t.GetGenericTypeDefinition() == typeof(IList<>) ? t : t.GetInterface("IList`1");
-            if (i_type == null)
+            foreach (var (list, item) in arrayInterfaces)
             {
-                return null;
+                if (list.IsAssignableFrom(t))
+                {
+                    inner = item;
+                    break;
+                }
             }
 
-            var inner = i_type.GetGenericArguments()[0];
+            arrayItemTypes[t] = inner;
             return inner;
         }
         #endregion
@@ -960,12 +1008,4 @@ namespace Datamodel
     }
 
     #endregion
-
-    static class Extensions
-    {
-        public static Type MakeListType(this Type t)
-        {
-            return typeof(List<>).MakeGenericType(t);
-        }
-    }
 }

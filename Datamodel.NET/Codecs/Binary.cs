@@ -79,7 +79,10 @@ namespace Datamodel.Codecs
             return ++i;
         }
 
-        Tuple<Type?, Type?> IdToType(byte id)
+        /// <summary>
+        /// Maps a type id of the stream to the attribute type, or to the item type when the id denotes an array.
+        /// </summary>
+        (Type Type, bool IsArray) IdToType(byte id)
         {
             var type_list = SupportedAttributes[EncodingVersion];
             bool array = false;
@@ -100,14 +103,12 @@ namespace Datamodel.Codecs
                 }
             }
 
-            try
-            {
-                return new Tuple<Type?, Type?>((array ? type_list[id]?.MakeListType() : type_list[id]), (array ? type_list[id] : null));
-            }
-            catch (IndexOutOfRangeException)
+            if (id >= type_list.Length || type_list[id] is not Type type)
             {
                 throw new CodecException(String.Format("Unrecognised attribute type: {0}", id + 1));
             }
+
+            return (type, array);
         }
 
         protected string ReadString_Raw(BinaryReader reader)
@@ -503,17 +504,16 @@ namespace Datamodel.Codecs
 
         object? DecodeAttribute(Datamodel dm, bool prefix, BinaryReader reader)
         {
-            var types = IdToType(reader.ReadByte());
+            var (type, isArray) = IdToType(reader.ReadByte());
 
-            if (types.Item2 == null)
-                return ReadValue(dm, TypeMap[types.Item1.TypeHandle], EncodingVersion < 4 || prefix, reader);
+            if (!isArray)
+                return ReadValue(dm, TypeMap[type.TypeHandle], EncodingVersion < 4 || prefix, reader);
             else
             {
                 var count = reader.ReadInt32();
-                var inner_type = types.Item2;
-                var array = CodecUtilities.MakeList(inner_type, count);
+                var array = CodecUtilities.MakeList(type, count);
 
-                var typeId = TypeMap[inner_type.TypeHandle];
+                var typeId = TypeMap[type.TypeHandle];
                 foreach (var x in Enumerable.Range(0, count))
                     array.Add(ReadValue(dm, typeId, true, reader));
 
@@ -523,20 +523,13 @@ namespace Datamodel.Codecs
 
         void SkipAttribute(BinaryReader reader)
         {
-            var types = IdToType(reader.ReadByte());
+            var (type, isArray) = IdToType(reader.ReadByte());
 
             int count = 1;
-            Type? type = types.Item1;
 
-            if (type is null)
-            {
-                throw new InvalidDataException("Failed to match id to type");
-            }
-
-            if (types.Item2 != null)
+            if (isArray)
             {
                 count = reader.ReadInt32();
-                type = types.Item2;
             }
 
             if (type == typeof(Element))
@@ -562,7 +555,7 @@ namespace Datamodel.Codecs
             }
             else if (type == typeof(string))
             {
-                if (!StringDict!.Dummy && types.Item2 == null && EncodingVersion >= 4)
+                if (!StringDict!.Dummy && !isArray && EncodingVersion >= 4)
                     length = StringDict.IndiceSize;
                 else
                 {
@@ -582,8 +575,16 @@ namespace Datamodel.Codecs
                 length = sizeof(float) * 4;
             else if (type == typeof(Matrix4x4))
                 length = sizeof(float) * 4 * 4;
+            else if (type == typeof(QAngle))
+                length = sizeof(float) * 3;
+            else if (type == typeof(int) || type == typeof(float))
+                length = 4;
+            else if (type == typeof(byte))
+                length = sizeof(byte);
+            else if (type == typeof(ulong))
+                length = sizeof(ulong);
             else
-                length = System.Runtime.InteropServices.Marshal.SizeOf(type);
+                throw new CodecException($"Cannot skip an attribute of type {type.Name}.");
 
             reader.BaseStream.Seek(length * count, SeekOrigin.Current);
         }
