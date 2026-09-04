@@ -5,20 +5,10 @@ using System.Text;
 using System.Numerics;
 using System.IO;
 using System.Globalization;
-using System.Reflection;
-using System.Xml.Linq;
 using System.Collections;
 
 namespace Datamodel.Codecs
 {
-    [CodecFormat("keyvalues2", 1)]
-    [CodecFormat("keyvalues2", 2)]
-    [CodecFormat("keyvalues2", 3)]
-    [CodecFormat("keyvalues2", 4)]
-    [CodecFormat("keyvalues2_noids", 1)]
-    [CodecFormat("keyvalues2_noids", 2)]
-    [CodecFormat("keyvalues2_noids", 3)]
-    [CodecFormat("keyvalues2_noids", 4)]
     class KeyValues2 : ICodec
     {
         static readonly Dictionary<Type, string> TypeNames = [];

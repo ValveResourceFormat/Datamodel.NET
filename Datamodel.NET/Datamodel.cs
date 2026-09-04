@@ -152,75 +152,51 @@ namespace Datamodel
 
         static Datamodel()
         {
-            RegisterCodec(typeof(Binary));
-            RegisterCodec(typeof(KeyValues2));
+            RegisterCodec("binary", [1, 2, 3, 4, 5, 9], () => new Binary());
+            RegisterCodec("keyvalues2", [1, 2, 3, 4], () => new KeyValues2());
+            RegisterCodec("keyvalues2_noids", [1, 2, 3, 4], () => new KeyValues2());
             TextEncoding = new System.Text.UTF8Encoding(false);
         }
 
         #region Codecs
-        public static readonly Dictionary<CodecRegistration, Type> Codecs = [];
+        private static readonly Dictionary<CodecRegistration, Func<ICodec>> Codecs = [];
 
         public static IEnumerable<CodecRegistration> CodecsRegistered => Codecs.Keys.OrderBy(reg => string.Join(null, reg.Item1, reg.Item2)).ToArray();
 
         /// <summary>
-        /// Registers a new <see cref="ICodec"/> with an encoding name and one or more encoding versions.
+        /// Registers an <see cref="ICodec"/> for an encoding name and one or more encoding versions.
         /// </summary>
         /// <remarks>Existing codecs will be replaced.</remarks>
-        /// <param name="type">The ICodec implementation being registered.</param>
-        public static void RegisterCodec(Type type)
+        /// <param name="encoding">The encoding name that the codec handles.</param>
+        /// <param name="versions">The encoding version(s) that the codec handles.</param>
+        /// <param name="create">Creates a new instance of the codec. Called once per encode or decode.</param>
+        public static void RegisterCodec(string encoding, IEnumerable<int> versions, Func<ICodec> create)
         {
-            if (type.GetInterface(typeof(ICodec).FullName!) == null)
-            {
-                throw new CodecException($"{type.Name} does not implement Datamodel.Codecs.ICodec.");
-            }
+            ArgumentNullException.ThrowIfNull(encoding);
+            ArgumentNullException.ThrowIfNull(versions);
+            ArgumentNullException.ThrowIfNull(create);
 
-            if (type.GetConstructor(Type.EmptyTypes) == null)
+            foreach (var version in versions)
             {
-                throw new CodecException($"{type.Name} does not have a default constructor.");
-            }
+                var reg = new CodecRegistration(encoding, version);
 
-            var format_attrs = (CodecFormatAttribute[])type.GetCustomAttributes(typeof(CodecFormatAttribute), true);
-            if (format_attrs.Length == 0)
-            {
-                throw new CodecException($"{type.Name} does not provide Datamodel.Codecs.CodecFormatAttribute.");
-            }
-
-            foreach (var format_attr in format_attrs)
-            {
-                foreach (var version in format_attr.Versions)
+                if (Codecs.ContainsKey(reg))
                 {
-                    var reg = new CodecRegistration(format_attr.Name, version);
-                    AddCodec(type, format_attr, reg);
-                }
-            }
-
-            static void AddCodec(Type type, CodecFormatAttribute format_attr, CodecRegistration reg)
-            {
-                if (Codecs.ContainsKey(reg) && Codecs[reg] != type)
-                {
-                    Trace.TraceInformation("Datamodel.NET: Replacing existing codec for {0} {1} ({2}) with {3}", format_attr.Name, reg.Item2, Codecs[reg].Name, type.Name);
+                    Trace.TraceInformation("Datamodel.NET: Replacing existing codec for {0} {1}", encoding, version);
                 }
 
-                Codecs[reg] = type;
+                Codecs[reg] = create;
             }
         }
 
         private static ICodec GetCodec(string encoding, int encoding_version)
         {
-            Type? codec_type;
-            if (!Codecs.TryGetValue(new CodecRegistration(encoding, encoding_version), out codec_type))
+            if (!Codecs.TryGetValue(new CodecRegistration(encoding, encoding_version), out var create))
             {
                 throw new CodecException($"No codec found for {encoding} version {encoding_version}.");
             }
 
-            var codecConstructor = codec_type.GetConstructor(Type.EmptyTypes);
-
-            if (codecConstructor is null)
-            {
-                throw new InvalidOperationException("Failed to get codec constructor.");
-            }
-
-            return (ICodec)codecConstructor.Invoke(null);
+            return create();
         }
 
         /// <summary>

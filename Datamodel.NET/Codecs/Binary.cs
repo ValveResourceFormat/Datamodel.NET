@@ -10,12 +10,6 @@ using System.Threading;
 
 namespace Datamodel.Codecs
 {
-    [CodecFormat("binary", 1)]
-    [CodecFormat("binary", 2)]
-    [CodecFormat("binary", 3)]
-    [CodecFormat("binary", 4)]
-    [CodecFormat("binary", 5)]
-    [CodecFormat("binary", 9)]
     class Binary : IDeferredAttributeCodec
     {
         static readonly Dictionary<int, Type?[]> SupportedAttributes = [];
