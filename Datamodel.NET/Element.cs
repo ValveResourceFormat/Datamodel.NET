@@ -148,16 +148,7 @@ namespace Datamodel
             {
                 if (value != null && base.Owner != null && base.Owner.AllElements.Contains(this)) throw new InvalidOperationException("Element already has an owner.");
                 base.Owner = value;
-                if (value != null)
-                {
-                    value.AllElements.ChangeLock.EnterWriteLock();
-                    try
-                    {
-                        value.AllElements.Add(this);
-                        if (value.AllElements.Count == 1) value.Root = this;
-                    }
-                    finally { value.AllElements.ChangeLock.ExitWriteLock(); }
-                }
+                value?.AllElements.Add(this);
             }
         }
 
