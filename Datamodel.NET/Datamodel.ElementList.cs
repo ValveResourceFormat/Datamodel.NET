@@ -204,6 +204,30 @@ namespace Datamodel
             }
 
             /// <summary>
+            /// Removes an <see cref="Element"/> which the caller knows is not referenced by any other Element, without scanning the Datamodel.
+            /// </summary>
+            internal void RemoveUnreferenced(Element item)
+            {
+                ChangeLock.EnterWriteLock();
+                try
+                {
+                    if (!store.Contains(item.ID))
+                    {
+                        return;
+                    }
+
+                    store.Remove(item.ID);
+                    item.Owner = null;
+                }
+                finally
+                {
+                    ChangeLock.ExitWriteLock();
+                }
+
+                CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, item));
+            }
+
+            /// <summary>
             /// Removes unreferenced Elements from the Datamodel.
             /// </summary>
             public void Trim()
