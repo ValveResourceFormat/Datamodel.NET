@@ -39,7 +39,7 @@ namespace Datamodel
         Byte,
         /// <summary>An array of any of the above.</summary>
         Array,
-        /// <summary>The value has not been read from the stream yet; <see cref="InlineValue.Ticks"/> holds the position it starts at.</summary>
+        /// <summary>The value has not been read from the stream yet; <see cref="InlineValue.Offset"/> holds the position it starts at.</summary>
         Deferred,
     }
 
@@ -55,6 +55,8 @@ namespace Datamodel
         [FieldOffset(0)] public byte Byte;
         [FieldOffset(0)] public ulong UInt64;
         [FieldOffset(0)] public long Ticks;
+        /// <summary>Alias of <see cref="Ticks"/>, used when the slot is <see cref="AttributeType.Deferred"/> and holds a stream offset rather than a duration.</summary>
+        [FieldOffset(0)] public long Offset;
         [FieldOffset(0)] public Color Color;
         [FieldOffset(0)] public Vector2 Vector2;
         [FieldOffset(0)] public Vector3 Vector3;
@@ -361,7 +363,7 @@ namespace Datamodel
         void LoadDeferred(int index)
         {
             var codec = Owner?.Codec ?? throw new CodecException("Trying to load a deferred Attribute, but could not find codec.");
-            var offset = slots![index].Inline.Ticks;
+            var offset = slots![index].Inline.Offset;
             var name = slots[index].Name;
             object? value;
 
@@ -393,7 +395,7 @@ namespace Datamodel
                 slot.Reference = null;
                 slot.Override = null;
                 slot.Inline = default;
-                slot.Inline.Ticks = offset;
+                slot.Inline.Offset = offset;
             }
         }
 
