@@ -55,7 +55,6 @@ namespace Datamodel
         [FieldOffset(0)] public byte Byte;
         [FieldOffset(0)] public ulong UInt64;
         [FieldOffset(0)] public long Ticks;
-        /// <summary>Alias of <see cref="Ticks"/>, used when the slot is <see cref="AttributeType.Deferred"/> and holds a stream offset rather than a duration.</summary>
         [FieldOffset(0)] public long Offset;
         [FieldOffset(0)] public Color Color;
         [FieldOffset(0)] public Vector2 Vector2;
