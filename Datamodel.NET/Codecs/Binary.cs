@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers.Binary;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -133,6 +134,12 @@ namespace Datamodel.Codecs
             /// <summary>Fast string index lookup.</summary>
             readonly Dictionary<string, int>? Indices;
 
+            /// <summary>
+            /// Indices of the attribute and class name instances met so far. Names of class properties and of attributes read from a file are shared instances,
+            /// so this finds them without hashing their characters, the way Valve looks attribute names up as symbols.
+            /// </summary>
+            readonly Dictionary<string, int> NameIndices = new(ReferenceEqualityComparer.Instance);
+
             public bool Dummy;
 
             // binary 4 uses int for dictionary length, but short for dictionary indices. Whoops!
@@ -187,25 +194,53 @@ namespace Datamodel.Codecs
                 return Indices!.TryGetValue(value, out var index) ? index : -1;
             }
 
+            /// <summary>
+            /// Adds an attribute or class name to the table unless it is there already.
+            /// </summary>
+            public void AddName(string name)
+            {
+                if (Indices == null || NameIndices.ContainsKey(name))
+                    return;
+
+                AddString(name);
+                NameIndices[name] = Indices[name];
+            }
+
+            public void WriteName(string name, OutputBuffer writer)
+            {
+                if (Dummy)
+                {
+                    writer.Write(name);
+                    return;
+                }
+
+                if (!NameIndices.TryGetValue(name, out var index))
+                    NameIndices[name] = index = GetIndex(name);
+
+                WriteIndex(index, writer);
+            }
+
             public string ReadString(BinaryReader reader)
             {
                 if (Dummy) return Codec!.ReadString_Raw(reader);
                 return Strings[IndiceSize == sizeof(short) ? reader.ReadInt16() : reader.ReadInt32()];
             }
 
-            public void WriteString(string value, BinaryWriter writer)
+            public void WriteString(string value, OutputBuffer writer)
             {
                 if (Dummy)
                     writer.Write(value);
                 else
-                {
-                    var index = GetIndex(value);
-                    if (IndiceSize == sizeof(short)) writer.Write((short)index);
-                    else writer.Write(index);
-                }
+                    WriteIndex(GetIndex(value), writer);
             }
 
-            public void WriteSelf(BinaryWriter writer)
+            void WriteIndex(int index, OutputBuffer writer)
+            {
+                if (IndiceSize == sizeof(short)) writer.Write((short)index);
+                else writer.Write(index);
+            }
+
+            public void WriteSelf(OutputBuffer writer)
             {
                 if (Dummy) return;
 
@@ -222,9 +257,9 @@ namespace Datamodel.Codecs
 
         public void Encode(Datamodel dm, string encoding, int encoding_version, Stream stream)
         {
-            using var writer = new DmxBinaryWriter(stream);
-            var encoder = new Encoder(writer, dm, encoding_version);
-            encoder.Encode();
+            var output = new OutputBuffer(stream);
+            new Encoder(output, dm, encoding_version).Encode();
+            output.Flush();
         }
 
         private static readonly Dictionary<RuntimeTypeHandle, int> TypeMap = new Dictionary<RuntimeTypeHandle, int>
@@ -616,7 +651,7 @@ namespace Datamodel.Codecs
         /// </summary>
         sealed class Encoder
         {
-            readonly BinaryWriter Writer;
+            readonly OutputBuffer Writer;
             readonly StringDictionary StringDict;
             readonly Datamodel Datamodel;
             readonly int EncodingVersion;
@@ -630,7 +665,7 @@ namespace Datamodel.Codecs
             readonly Dictionary<Type, byte> ArrayIds = [];
             readonly byte ElementId, StringId, BinaryId, MatrixId;
 
-            public Encoder(BinaryWriter writer, Datamodel dm, int version)
+            public Encoder(OutputBuffer writer, Datamodel dm, int version)
             {
                 EncodingVersion = version;
                 Writer = writer;
@@ -684,7 +719,7 @@ namespace Datamodel.Codecs
                 foreach (var body in Order)
                 {
                     var (className, name, elementId) = body is Element elem ? (elem.ClassName, elem.Name, elem.ID) : (PrefixElementClass, string.Empty, Datamodel.PrefixElementId);
-                    StringDict.WriteString(className, Writer);
+                    StringDict.WriteName(className, Writer);
                     if (EncodingVersion >= 4) StringDict.WriteString(name, Writer);
                     else Writer.Write(name);
                     elementId.TryWriteBytes(id);
@@ -701,7 +736,7 @@ namespace Datamodel.Codecs
             void Gather(Element elem)
             {
                 StringDict.AddString(elem.Name);
-                StringDict.AddString(elem.ClassName);
+                StringDict.AddName(elem.ClassName);
 
                 var visitor = new GatherVisitor(this);
                 elem.VisitAttributes(ref visitor);
@@ -725,7 +760,7 @@ namespace Datamodel.Codecs
 
                 public void Visit(string name, AttributeKind kind, in InlineValue inline, object? reference)
                 {
-                    encoder.StringDict.AddString(name);
+                    encoder.StringDict.AddName(name);
 
                     switch (reference)
                     {
@@ -781,7 +816,7 @@ namespace Datamodel.Codecs
 
                 public void Visit(string name, AttributeKind kind, in InlineValue inline, object? reference)
                 {
-                    encoder.StringDict.WriteString(name, encoder.Writer);
+                    encoder.StringDict.WriteName(name, encoder.Writer);
                     encoder.WriteValue(kind, in inline, reference, rawStrings: false);
                 }
             }
@@ -999,8 +1034,7 @@ namespace Datamodel.Codecs
                 if (elem.Stub)
                 {
                     Writer.Write(-2);
-                    Writer.Write(elem.ID.ToString().ToCharArray()); // yes, ToString()!
-                    Writer.Write((byte)0);
+                    Writer.Write(elem.ID.ToString()); // yes, ToString()!
                 }
                 else
                 {
@@ -1051,27 +1085,100 @@ namespace Datamodel.Codecs
             };
         }
 
-        class DmxBinaryWriter : BinaryWriter
+        /// <summary>
+        /// Collects the output and hands it to the stream in large pieces, the way Valve's CUtlBuffer does, so that writing a value is a few stores rather than a call into the stream.
+        /// </summary>
+        sealed class OutputBuffer(Stream stream)
         {
-            public DmxBinaryWriter(Stream output)
-                : base(output, Datamodel.TextEncoding)
-            { }
+            readonly byte[] buffer = new byte[1 << 16];
+            int used;
 
-            /// <summary>
-            /// Writes a null-terminated string to the underlying stream using <see cref="Datamodel.TextEncoding"/>.
-            /// </summary>
-            /// <param name="value"></param>
-            [System.Security.SecuritySafeCritical]
-            public override void Write(string value)
+            public void Flush()
             {
-                if (value != null)
-                    base.Write(Datamodel.TextEncoding.GetBytes(value));
-                base.Write((byte)0);
+                if (used > 0)
+                {
+                    stream.Write(buffer, 0, used);
+                    used = 0;
+                }
             }
 
-            protected override void Dispose(bool disposing)
+            void Reserve(int size)
             {
-                return; // don't mess with the base stream!
+                if (buffer.Length - used < size)
+                    Flush();
+            }
+
+            public void Write(byte value)
+            {
+                Reserve(1);
+                buffer[used++] = value;
+            }
+
+            public void Write(short value)
+            {
+                Reserve(2);
+                BinaryPrimitives.WriteInt16LittleEndian(buffer.AsSpan(used), value);
+                used += 2;
+            }
+
+            public void Write(int value)
+            {
+                Reserve(4);
+                BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(used), value);
+                used += 4;
+            }
+
+            public void Write(float value)
+            {
+                Reserve(4);
+                BinaryPrimitives.WriteSingleLittleEndian(buffer.AsSpan(used), value);
+                used += 4;
+            }
+
+            public void Write(ulong value)
+            {
+                Reserve(8);
+                BinaryPrimitives.WriteUInt64LittleEndian(buffer.AsSpan(used), value);
+                used += 8;
+            }
+
+            public void Write(ReadOnlySpan<byte> bytes)
+            {
+                if (bytes.Length > buffer.Length - used)
+                {
+                    Flush();
+                    if (bytes.Length > buffer.Length)
+                    {
+                        stream.Write(bytes);
+                        return;
+                    }
+                }
+
+                bytes.CopyTo(buffer.AsSpan(used));
+                used += bytes.Length;
+            }
+
+            /// <summary>
+            /// Writes a string in <see cref="Datamodel.TextEncoding"/> followed by a zero byte.
+            /// </summary>
+            public void Write(string? value)
+            {
+                if (value != null)
+                {
+                    var encoding = Datamodel.TextEncoding;
+                    var room = encoding.GetMaxByteCount(value.Length);
+                    if (room > buffer.Length)
+                    {
+                        Write(encoding.GetBytes(value));
+                    }
+                    else
+                    {
+                        Reserve(room);
+                        used += encoding.GetBytes(value, buffer.AsSpan(used));
+                    }
+                }
+
+                Write((byte)0);
             }
         }
     }
