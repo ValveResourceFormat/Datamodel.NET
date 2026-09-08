@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Benchmarks": {
+      "commandName": "Project",
+      "commandLineArgs": "--iterations 1 \"E:\\Steam\\steamapps\\common\\Counter-Strike Global Offensive\\content\\csgo_addons\\decomp_mesh_test_2\\maps\""
+    }
+  }
+}
