@@ -49,8 +49,9 @@ Elements with no matching class are loaded as plain `Element`s.
 
 How the classes are found:
 
-* The `KeyValues2.ElementFactoryGenerator` source generator emits an `ElementFactory` into every assembly that references this package.
-* Loading asks those factories, the one in the assembly of `T` first. No reflection over types happens at load time.
+* A source generator, shipped inside the package, emits an `ElementFactory` into every assembly that declares `Element` subclasses. It constructs the classes by name, lists their properties, and registers itself when the assembly is initialised.
+* Loading asks the registered factories, the one in the assembly of `T` first. Pass a `LoadOptions` to pick another namespace or factory.
+* The library uses no reflection and is compatible with trimming and Native AOT. Properties with `init` or non-public setters are assigned through `UnsafeAccessor`, so the classes need no special shape.
 
 How a subclass maps onto the file:
 
@@ -58,6 +59,7 @@ How a subclass maps onto the file:
 * Attributes of the file that no property claims are kept as plain attributes and written back unchanged.
 * Every property is always written, like in Valve's datamodel. Loading an older file through a class with newer properties adds those with their default values.
 * Assigning a file attribute to a property of an incompatible type throws an `InvalidDataException` naming the property, which usually means the class does not match the format.
+* A class must be `internal` or `public` for the generated factory to see it. A private nested class is loaded as a plain `Element` and the generator warns about it (DMX002).
 
 ## Serialization
 

@@ -1,13 +1,18 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace Datamodel
 {
+    /// <summary>
+    /// A typed attribute array. Items are stored contiguously, either in a private buffer or, for arrays read from a file,
+    /// in a slice of a chunk shared with the other arrays of that file; the first change that needs more room moves the array to a private buffer.
+    /// </summary>
     [DebuggerTypeProxy(typeof(Array<>.DebugView))]
-    [DebuggerDisplay("Count = {Inner.Count}")]
+    [DebuggerDisplay("Count = {Count}")]
     public abstract class Array<T> : IList<T>, IList
     {
         internal class DebugView(Array<T> arr)
@@ -15,10 +20,14 @@ namespace Datamodel
             readonly Array<T> Arr = arr;
 
             [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
-            public T[] Items { get { return [.. Arr.Inner]; } }
+            public T[] Items { get { return Arr.AsSpan().ToArray(); } }
         }
 
-        protected List<T> Inner;
+        T[] buffer;
+        int offset;
+        int count;
+        int capacity;
+        bool shared;
 
         public virtual AttributeList? Owner
         {
@@ -34,51 +43,135 @@ namespace Datamodel
 
         internal Array()
         {
-            Inner = [];
+            buffer = [];
         }
 
         internal Array(IEnumerable<T> enumerable)
         {
-            if (enumerable != null)
-                Inner = [.. enumerable];
-            else
-                Inner = [];
+            buffer = enumerable is null ? [] : [.. enumerable];
+            count = capacity = buffer.Length;
         }
 
         internal Array(int capacity)
         {
-            Inner = new List<T>(capacity);
+            buffer = capacity > 0 ? new T[capacity] : [];
+            this.capacity = capacity;
         }
 
-        public int IndexOf(T item) => Inner.IndexOf(item);
+        /// <summary>
+        /// Creates an array over a slice of a chunk shared with other arrays. The slice belongs to this array alone, but cannot grow in place.
+        /// </summary>
+        internal Array(T[] buffer, int offset, int count)
+        {
+            this.buffer = buffer;
+            this.offset = offset;
+            this.count = count;
+            capacity = count;
+            shared = true;
+        }
+
+        /// <summary>
+        /// Gets the items as a span. The span is invalidated by any change to the array.
+        /// </summary>
+        public ReadOnlySpan<T> AsSpan() => new(buffer, offset, count);
+
+        /// <summary>
+        /// The items, writable. Invalidated by any change to the array.
+        /// </summary>
+        protected Span<T> Items => new(buffer, offset, count);
+
+        /// <summary>
+        /// Moves the items to a private buffer with room for at least <paramref name="minimum"/> items.
+        /// </summary>
+        void Grow(int minimum)
+        {
+            var newCapacity = Math.Max(minimum, Math.Max(capacity * 2, 4));
+            var newBuffer = new T[newCapacity];
+            Items.CopyTo(newBuffer);
+            buffer = newBuffer;
+            offset = 0;
+            capacity = newCapacity;
+            shared = false;
+        }
+
+        public int IndexOf(T item)
+        {
+            var index = System.Array.IndexOf(buffer, item, offset, count);
+            return index < 0 ? -1 : index - offset;
+        }
 
         public void Insert(int index, T item) => Insert_Internal(index, item);
-        protected virtual void Insert_Internal(int index, T item) => Inner.Insert(index, item);
 
-        public void AddRange(IEnumerable<T> items) => Inner.AddRange(items);
+        protected virtual void Insert_Internal(int index, T item)
+        {
+            ArgumentOutOfRangeException.ThrowIfGreaterThan((uint)index, (uint)count, nameof(index));
 
-        public void RemoveAt(int index) => Inner.RemoveAt(index);
+            if (count == capacity)
+                Grow(count + 1);
+
+            if (index < count)
+                System.Array.Copy(buffer, offset + index, buffer, offset + index + 1, count - index);
+
+            buffer[offset + index] = item;
+            count++;
+        }
+
+        public void AddRange(IEnumerable<T> items)
+        {
+            ArgumentNullException.ThrowIfNull(items);
+
+            if (items is ICollection<T> collection)
+            {
+                if (count + collection.Count > capacity)
+                    Grow(count + collection.Count);
+
+                collection.CopyTo(buffer, offset + count);
+                count += collection.Count;
+                return;
+            }
+
+            foreach (var item in items)
+                Add(item);
+        }
+
+        public void RemoveAt(int index)
+        {
+            ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual((uint)index, (uint)count, nameof(index));
+
+            count--;
+            if (index < count)
+                System.Array.Copy(buffer, offset + index + 1, buffer, offset + index, count - index);
+
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+                buffer[offset + count] = default!;
+        }
 
         public virtual T this[int index]
         {
-            get => Inner[index];
-            set => Inner[index] = value;
+            get => Items[index];
+            set => Items[index] = value;
         }
 
-        public void Add(T item) => Insert(Inner.Count, item);
+        public void Add(T item) => Insert(count, item);
 
-        public void Clear() => Inner.Clear();
+        public void Clear()
+        {
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+                Items.Clear();
 
-        public bool Contains(T item) => Inner.Contains(item);
+            count = 0;
+        }
+
+        public bool Contains(T item) => IndexOf(item) >= 0;
 
         public void CopyTo(T[] array, int offset)
         {
             CopyTo_Internal(array, offset);
         }
 
-        protected virtual void CopyTo_Internal(T[] array, int offset) => Inner.CopyTo(array, offset);
+        protected virtual void CopyTo_Internal(T[] array, int offset) => Items.CopyTo(array.AsSpan(offset));
 
-        public int Count => Inner.Count;
+        public int Count => count;
 
         bool ICollection<T>.IsReadOnly { get { return false; } }
 
@@ -88,7 +181,7 @@ namespace Datamodel
 
         public bool IsSynchronized => false;
 
-        public object SyncRoot => Inner;
+        public object SyncRoot => this;
 
         object? IList.this[int index]
         {
@@ -96,10 +189,23 @@ namespace Datamodel
             set => this[index] = value is null ? throw new InvalidOperationException("Trying to set a null object") : (T)value;
         }
 
-        public bool Remove(T item) => Inner.Remove(item);
+        public bool Remove(T item)
+        {
+            var index = IndexOf(item);
+            if (index < 0)
+                return false;
 
-        public IEnumerator<T> GetEnumerator() => Inner.GetEnumerator();
-        IEnumerator IEnumerable.GetEnumerator() => Inner.GetEnumerator();
+            RemoveAt(index);
+            return true;
+        }
+
+        public IEnumerator<T> GetEnumerator()
+        {
+            for (var i = 0; i < count; i++)
+                yield return buffer[offset + i];
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
         #region IList
         int IList.Add(object? value)
@@ -151,6 +257,55 @@ namespace Datamodel
         #endregion IList
     }
 
+    /// <summary>
+    /// Hands out slices of large shared arrays to the arrays read from one file, so that the collector sees a few large objects
+    /// that it never moves, instead of hundreds of thousands of small ones that it copies through every generation.
+    /// </summary>
+    sealed class ArrayChunks
+    {
+        /// <summary>Chunk size in bytes. Above the large object threshold, so that chunks are never compacted.</summary>
+        const int ChunkBytes = 1 << 20;
+
+        /// <summary>Arrays at least this large get their own allocation, which lands on the large object heap anyway.</summary>
+        const int LargeObjectBytes = 85_000;
+
+        sealed class Chunk<T>
+        {
+            public T[] Buffer = [];
+            public int Used;
+        }
+
+        readonly Dictionary<Type, object> chunks = [];
+
+        /// <summary>
+        /// Returns storage for <paramref name="count"/> items. The contents are not zeroed.
+        /// </summary>
+        public (T[] Buffer, int Offset) Rent<T>(int count) where T : unmanaged
+        {
+            var itemSize = Unsafe.SizeOf<T>();
+
+            if ((long)count * itemSize >= LargeObjectBytes)
+                return (GC.AllocateUninitializedArray<T>(count), 0);
+
+            if (!chunks.TryGetValue(typeof(T), out var untyped))
+            {
+                untyped = new Chunk<T>();
+                chunks[typeof(T)] = untyped;
+            }
+
+            var chunk = (Chunk<T>)untyped;
+            if (chunk.Buffer.Length - chunk.Used < count)
+            {
+                chunk.Buffer = GC.AllocateUninitializedArray<T>(Math.Max(ChunkBytes / itemSize, count));
+                chunk.Used = 0;
+            }
+
+            var offset = chunk.Used;
+            chunk.Used += count;
+            return (chunk.Buffer, offset);
+        }
+    }
+
     public class ElementArray : Array<Element>
     {
         public ElementArray() { }
@@ -164,9 +319,9 @@ namespace Datamodel
         { }
 
         /// <summary>
-        /// Gets the values in the list without attempting destubbing.
+        /// Gets the items without attempting destubbing.
         /// </summary>
-        internal IEnumerable<Element> RawList { get { foreach (var elem in Inner) yield return elem; } }
+        internal ReadOnlySpan<Element> RawItems => AsSpan();
 
         public override AttributeList? Owner
         {
@@ -177,9 +332,10 @@ namespace Datamodel
 
                 if (OwnerDatamodel != null)
                 {
-                    for (int i = 0; i < Count; i++)
+                    var items = Items;
+                    for (int i = 0; i < items.Length; i++)
                     {
-                        var elem = Inner[i];
+                        var elem = items[i];
 
                         if (elem == null) continue;
                         if (elem.Owner == null)
@@ -188,7 +344,7 @@ namespace Datamodel
 
                             if (importedElement is not null)
                             {
-                                Inner[i] = importedElement;
+                                items[i] = importedElement;
                             }
                         }
                         else if (elem.Owner != OwnerDatamodel)
@@ -224,12 +380,13 @@ namespace Datamodel
         {
             get
             {
-                var elem = Inner[index];
+                var items = Items;
+                var elem = items[index];
                 if (elem != null && elem.Stub && elem.Owner != null)
                 {
                     try
                     {
-                        elem = Inner[index] = elem.Owner.OnStubRequest(elem.ID)!;
+                        elem = items[index] = elem.Owner.OnStubRequest(elem.ID)!;
                     }
                     catch (Exception err)
                     {
@@ -257,6 +414,9 @@ namespace Datamodel
         public IntArray(int capacity)
             : base(capacity)
         { }
+        internal IntArray(int[] buffer, int offset, int count)
+            : base(buffer, offset, count)
+        { }
     }
 
     public class FloatArray : Array<float>
@@ -268,6 +428,9 @@ namespace Datamodel
         public FloatArray(int capacity)
             : base(capacity)
         { }
+        internal FloatArray(float[] buffer, int offset, int count)
+            : base(buffer, offset, count)
+        { }
     }
 
     public class BoolArray : Array<bool>
@@ -278,6 +441,9 @@ namespace Datamodel
         { }
         public BoolArray(int capacity)
             : base(capacity)
+        { }
+        internal BoolArray(bool[] buffer, int offset, int count)
+            : base(buffer, offset, count)
         { }
     }
 
@@ -323,6 +489,9 @@ namespace Datamodel
         public ColorArray(int capacity)
             : base(capacity)
         { }
+        internal ColorArray(Color[] buffer, int offset, int count)
+            : base(buffer, offset, count)
+        { }
     }
 
     public class Vector2Array : Array<Vector2>
@@ -333,6 +502,9 @@ namespace Datamodel
         { }
         public Vector2Array(int capacity)
             : base(capacity)
+        { }
+        internal Vector2Array(Vector2[] buffer, int offset, int count)
+            : base(buffer, offset, count)
         { }
     }
 
@@ -345,6 +517,9 @@ namespace Datamodel
         public Vector3Array(int capacity)
             : base(capacity)
         { }
+        internal Vector3Array(Vector3[] buffer, int offset, int count)
+            : base(buffer, offset, count)
+        { }
     }
 
     public class Vector4Array : Array<Vector4>
@@ -355,6 +530,9 @@ namespace Datamodel
         { }
         public Vector4Array(int capacity)
             : base(capacity)
+        { }
+        internal Vector4Array(Vector4[] buffer, int offset, int count)
+            : base(buffer, offset, count)
         { }
     }
 
@@ -367,6 +545,9 @@ namespace Datamodel
         public QuaternionArray(int capacity)
             : base(capacity)
         { }
+        internal QuaternionArray(Quaternion[] buffer, int offset, int count)
+            : base(buffer, offset, count)
+        { }
     }
 
     public class MatrixArray : Array<Matrix4x4>
@@ -377,6 +558,9 @@ namespace Datamodel
         { }
         public MatrixArray(int capacity)
             : base(capacity)
+        { }
+        internal MatrixArray(Matrix4x4[] buffer, int offset, int count)
+            : base(buffer, offset, count)
         { }
     }
 
@@ -389,6 +573,9 @@ namespace Datamodel
         public ByteArray(int capacity)
             : base(capacity)
         { }
+        internal ByteArray(byte[] buffer, int offset, int count)
+            : base(buffer, offset, count)
+        { }
     }
 
     [CLSCompliant(false)]
@@ -400,6 +587,9 @@ namespace Datamodel
         { }
         public UInt64Array(int capacity)
             : base(capacity)
+        { }
+        internal UInt64Array(ulong[] buffer, int offset, int count)
+            : base(buffer, offset, count)
         { }
     }
 }

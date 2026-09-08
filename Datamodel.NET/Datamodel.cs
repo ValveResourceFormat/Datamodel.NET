@@ -8,8 +8,10 @@ using System.Linq;
 using System.Runtime.Serialization;
 using System.Security;
 using System.Numerics;
+using System.Collections.Concurrent;
 using CodecRegistration = System.Tuple<string, int>;
-using System.Reflection;
+
+[assembly: System.CLSCompliant(true)]
 
 namespace Datamodel
 {
@@ -58,9 +60,55 @@ namespace Datamodel
         public static Type[] AttributeTypes => attributeTypes;
 
         /// <summary>
+        /// The <see cref="IList{T}"/> interface of every attribute type, paired with T. A type implementing one of these is an array of T.
+        /// </summary>
+        private static readonly (Type List, Type Item)[] arrayInterfaces = [
+            (typeof(IList<Element>), typeof(Element)),
+            (typeof(IList<int>), typeof(int)),
+            (typeof(IList<float>), typeof(float)),
+            (typeof(IList<bool>), typeof(bool)),
+            (typeof(IList<string>), typeof(string)),
+            (typeof(IList<byte[]>), typeof(byte[])),
+            (typeof(IList<TimeSpan>), typeof(TimeSpan)),
+            (typeof(IList<Color>), typeof(Color)),
+            (typeof(IList<Vector2>), typeof(Vector2)),
+            (typeof(IList<Vector3>), typeof(Vector3)),
+            (typeof(IList<Vector4>), typeof(Vector4)),
+            (typeof(IList<Quaternion>), typeof(Quaternion)),
+            (typeof(IList<Matrix4x4>), typeof(Matrix4x4)),
+            (typeof(IList<byte>), typeof(byte)),
+            (typeof(IList<ulong>), typeof(ulong)),
+            (typeof(IList<QAngle>), typeof(QAngle)),
+        ];
+
+        /// <summary>
+        /// The item type of every type that has been checked with <see cref="GetArrayInnerType"/>, or null for types that are not arrays.
+        /// </summary>
+        private static readonly ConcurrentDictionary<Type, Type?> arrayItemTypes = new()
+        {
+            [typeof(ElementArray)] = typeof(Element),
+            [typeof(IntArray)] = typeof(int),
+            [typeof(FloatArray)] = typeof(float),
+            [typeof(BoolArray)] = typeof(bool),
+            [typeof(StringArray)] = typeof(string),
+            [typeof(BinaryArray)] = typeof(byte[]),
+            [typeof(TimeSpanArray)] = typeof(TimeSpan),
+            [typeof(ColorArray)] = typeof(Color),
+            [typeof(Vector2Array)] = typeof(Vector2),
+            [typeof(Vector3Array)] = typeof(Vector3),
+            [typeof(Vector4Array)] = typeof(Vector4),
+            [typeof(QuaternionArray)] = typeof(Quaternion),
+            [typeof(MatrixArray)] = typeof(Matrix4x4),
+            [typeof(ByteArray)] = typeof(byte),
+            [typeof(UInt64Array)] = typeof(ulong),
+            [typeof(Element)] = null,
+            [typeof(string)] = null,
+        };
+
+        /// <summary>
         /// Determines whether the given Type is valid as a Datamodel <see cref="Attribute"/>.
         /// </summary>
-        /// <remarks><see cref="ICollection&lt;T&gt;"/> objects pass if their generic argument is valid.</remarks>
+        /// <remarks><see cref="ICollection{T}"/> objects pass if their generic argument is valid.</remarks>
         /// <seealso cref="IsDatamodelArrayType"/>
         /// <param name="t">The Type to check.</param>
         public static bool IsDatamodelType(Type t)
@@ -76,103 +124,81 @@ namespace Datamodel
         /// <param name="t">The Type to check.</param>
         public static bool IsDatamodelArrayType(Type t)
         {
-            var inner = GetArrayInnerType(t);
-            return inner != null && Datamodel.AttributeTypes.Contains(inner);
+            return GetArrayInnerType(t) != null;
         }
 
         /// <summary>
-        /// Returns the inner Type of an object which implements IList&lt;T&gt;, or null if there is no inner Type.
+        /// Returns the inner Type of an object which implements <see cref="IList{T}"/> for an attribute type T, or null if there is no inner Type.
         /// </summary>
         /// <param name="t">The Type to check.</param>
         public static Type? GetArrayInnerType(Type t)
         {
-            if (t == typeof(Element))
+            if (arrayItemTypes.TryGetValue(t, out var inner))
             {
-                return null;
+                return inner;
             }
 
-            var i_type = t.IsGenericType && t.GetGenericTypeDefinition() == typeof(IList<>) ? t : t.GetInterface("IList`1");
-            if (i_type == null)
+            foreach (var (list, item) in arrayInterfaces)
             {
-                return null;
+                if (list.IsAssignableFrom(t))
+                {
+                    inner = item;
+                    break;
+                }
             }
 
-            var inner = i_type.GetGenericArguments()[0];
+            arrayItemTypes[t] = inner;
             return inner;
         }
         #endregion
 
         static Datamodel()
         {
-            RegisterCodec(typeof(Binary));
-            RegisterCodec(typeof(KeyValues2));
+            RegisterCodec("binary", [1, 2, 3, 4, 5, 9], () => new Binary());
+            RegisterCodec("keyvalues2", [1, 2, 3, 4], () => new KeyValues2());
+            RegisterCodec("keyvalues2_noids", [1, 2, 3, 4], () => new KeyValues2());
             TextEncoding = new System.Text.UTF8Encoding(false);
         }
 
         #region Codecs
-        public static readonly Dictionary<CodecRegistration, Type> Codecs = [];
+        private static readonly Dictionary<CodecRegistration, Func<ICodec>> Codecs = [];
 
         public static IEnumerable<CodecRegistration> CodecsRegistered => Codecs.Keys.OrderBy(reg => string.Join(null, reg.Item1, reg.Item2)).ToArray();
 
         /// <summary>
-        /// Registers a new <see cref="ICodec"/> with an encoding name and one or more encoding versions.
+        /// Registers an <see cref="ICodec"/> for an encoding name and one or more encoding versions.
         /// </summary>
         /// <remarks>Existing codecs will be replaced.</remarks>
-        /// <param name="type">The ICodec implementation being registered.</param>
-        public static void RegisterCodec(Type type)
+        /// <param name="encoding">The encoding name that the codec handles.</param>
+        /// <param name="versions">The encoding version(s) that the codec handles.</param>
+        /// <param name="create">Creates a new instance of the codec. Called once per encode or decode.</param>
+        public static void RegisterCodec(string encoding, IEnumerable<int> versions, Func<ICodec> create)
         {
-            if (type.GetInterface(typeof(ICodec).FullName!) == null)
-            {
-                throw new CodecException($"{type.Name} does not implement Datamodel.Codecs.ICodec.");
-            }
+            ArgumentNullException.ThrowIfNull(encoding);
+            ArgumentNullException.ThrowIfNull(versions);
+            ArgumentNullException.ThrowIfNull(create);
 
-            if (type.GetConstructor(Type.EmptyTypes) == null)
+            foreach (var version in versions)
             {
-                throw new CodecException($"{type.Name} does not have a default constructor.");
-            }
+                var reg = new CodecRegistration(encoding, version);
 
-            var format_attrs = (CodecFormatAttribute[])type.GetCustomAttributes(typeof(CodecFormatAttribute), true);
-            if (format_attrs.Length == 0)
-            {
-                throw new CodecException($"{type.Name} does not provide Datamodel.Codecs.CodecFormatAttribute.");
-            }
-
-            foreach (var format_attr in format_attrs)
-            {
-                foreach (var version in format_attr.Versions)
+                if (Codecs.ContainsKey(reg))
                 {
-                    var reg = new CodecRegistration(format_attr.Name, version);
-                    AddCodec(type, format_attr, reg);
-                }
-            }
-
-            static void AddCodec(Type type, CodecFormatAttribute format_attr, CodecRegistration reg)
-            {
-                if (Codecs.ContainsKey(reg) && Codecs[reg] != type)
-                {
-                    Trace.TraceInformation("Datamodel.NET: Replacing existing codec for {0} {1} ({2}) with {3}", format_attr.Name, reg.Item2, Codecs[reg].Name, type.Name);
+                    Trace.TraceInformation("Datamodel.NET: Replacing existing codec for {0} {1}", encoding, version);
                 }
 
-                Codecs[reg] = type;
+                Codecs[reg] = create;
             }
         }
 
         private static ICodec GetCodec(string encoding, int encoding_version)
         {
-            Type? codec_type;
-            if (!Codecs.TryGetValue(new CodecRegistration(encoding, encoding_version), out codec_type))
+            if (!Codecs.TryGetValue(new CodecRegistration(encoding, encoding_version), out var create))
             {
                 throw new CodecException($"No codec found for {encoding} version {encoding_version}.");
             }
 
-            var codecConstructor = codec_type.GetConstructor(Type.EmptyTypes);
-
-            if (codecConstructor is null)
-            {
-                throw new InvalidOperationException("Failed to get codec constructor.");
-            }
-
-            return (ICodec)codecConstructor.Invoke(null);
+            return create();
         }
 
         /// <summary>
@@ -184,6 +210,40 @@ namespace Datamodel
         {
             return Codecs.ContainsKey(new CodecRegistration(encoding, encoding_version));
         }
+        #endregion
+
+        #region Element factories
+        private static readonly object elementFactoryLock = new();
+        private static IElementFactory[] elementFactories = [];
+
+        /// <summary>
+        /// Registers a factory whose classes <see cref="Load{T}(Stream, DeferredMode, LoadOptions)"/> constructs, and the schemas of those classes.
+        /// The ElementFactory generated by KeyValues2.ElementFactoryGenerator calls this when its assembly is initialised.
+        /// </summary>
+        public static void RegisterElementFactory(IElementFactory factory)
+        {
+            ArgumentNullException.ThrowIfNull(factory);
+
+            lock (elementFactoryLock)
+            {
+                if (Array.IndexOf(elementFactories, factory) >= 0)
+                {
+                    return;
+                }
+
+                foreach (var schema in factory.Schemas)
+                {
+                    ElementSchema.Register(schema);
+                }
+
+                elementFactories = [.. elementFactories, factory];
+            }
+        }
+
+        /// <summary>
+        /// Gets the registered factories, in registration order.
+        /// </summary>
+        public static IReadOnlyList<IElementFactory> ElementFactories => elementFactories;
         #endregion
 
         #region Save / Load
@@ -244,15 +304,16 @@ namespace Datamodel
             return Load_Internal<Element>(stream, defer_mode, null);
         }
         /// <summary>
-        /// Loads a Datamodel from a <see cref="Stream"/>.
-        /// </summary> 
+        /// Loads a Datamodel from a <see cref="Stream"/>, constructing every element whose class name matches an <see cref="Element"/> subclass in the namespace of <typeparamref name="T"/>.
+        /// </summary>
         /// <param name="stream">The input Stream.</param>
         /// <param name="defer_mode">How to handle deferred loading.</param>
-        /// <typeparam  name="T">Type hint for what the Root of this datamodel should be when using reflection</param>
-        public static Datamodel Load<T>(Stream stream, DeferredMode defer_mode = DeferredMode.Automatic, ReflectionParams? reflectionParams = null)
+        /// <param name="options">Which namespace and factory to use. Defaults to those of <typeparamref name="T"/>.</param>
+        /// <typeparam name="T">The class of the Root element.</typeparam>
+        public static Datamodel Load<T>(Stream stream, DeferredMode defer_mode = DeferredMode.Automatic, LoadOptions? options = null)
             where T : Element
         {
-            return Load_Internal<T>(stream, defer_mode, reflectionParams);
+            return Load_Internal<T>(stream, defer_mode, options);
         }
 
         /// <summary>
@@ -265,15 +326,15 @@ namespace Datamodel
             return Load_Internal<Element>(new MemoryStream(data, true), defer_mode);
         }
         /// <summary>
-        /// Loads a Datamodel from a byte array.
+        /// Loads a Datamodel from a byte array, constructing every element whose class name matches an <see cref="Element"/> subclass in the namespace of <typeparamref name="T"/>.
         /// </summary>
         /// <param name="data">The input byte array.</param>
-        /// <param name="defer_mode">How to handle deferred loading.</param>
-        /// <typeparam  name="T">Type hint for what the Root of this datamodel should be when using reflection</param>
-        public static Datamodel Load<T>(byte[] data, ReflectionParams? reflectionParams = null)
+        /// <param name="options">Which namespace and factory to use. Defaults to those of <typeparamref name="T"/>.</param>
+        /// <typeparam name="T">The class of the Root element.</typeparam>
+        public static Datamodel Load<T>(byte[] data, LoadOptions? options = null)
              where T : Element
         {
-            return Load_Internal<T>(new MemoryStream(data, true), DeferredMode.Disabled, reflectionParams);
+            return Load_Internal<T>(new MemoryStream(data, true), DeferredMode.Disabled, options);
         }
 
         /// <summary>
@@ -296,46 +357,22 @@ namespace Datamodel
             }
         }
         /// <summary>
-        /// Loads a Datamodel from a file path, unserializing the Root as <typeparamref name="T"/>.
+        /// Loads a Datamodel from a file path, constructing every element whose class name matches an <see cref="Element"/> subclass in the namespace of <typeparamref name="T"/>.
         /// </summary>
         /// <param name="path">The source file path.</param>
-        /// <typeparam  name="T">Type hint for what the Root of this datamodel should be when using reflection</param>
-        public static Datamodel Load<T>(string path, ReflectionParams? reflectionParams = null)
+        /// <param name="options">Which namespace and factory to use. Defaults to those of <typeparamref name="T"/>.</param>
+        /// <typeparam name="T">The class of the Root element.</typeparam>
+        public static Datamodel Load<T>(string path, LoadOptions? options = null)
             where T : Element
         {
             using var stream = File.OpenRead(path);
-            return Load_Internal<T>(stream, DeferredMode.Disabled, reflectionParams);
+            return Load_Internal<T>(stream, DeferredMode.Disabled, options);
         }
 
-        private static Datamodel Load_Internal<T>(Stream stream, DeferredMode defer_mode = DeferredMode.Automatic, ReflectionParams? reflectionParams = null)
+        private static Datamodel Load_Internal<T>(Stream stream, DeferredMode defer_mode = DeferredMode.Automatic, LoadOptions? options = null)
             where T : Element
         {
-            reflectionParams ??= new();
-
-            var templateType = typeof(T);
-
-            if (templateType is null)
-            {
-                throw new InvalidDataException("Template type can't be null");
-            }
-
-            if (templateType == typeof(Element))
-            {
-                reflectionParams.AttemptReflection = false;
-            }
-
-            // if user doesnt specify these assume assembly and namespace of root node
-            if (reflectionParams.Assembly == string.Empty)
-            {
-                reflectionParams.Assembly = templateType.Assembly.GetName().Name!;
-            }
-
-            if (reflectionParams.Namespace == string.Empty)
-            {
-                reflectionParams.Namespace = templateType.Namespace!;
-            }
-
-            reflectionParams.RootAssembly ??= templateType.Assembly;
+            var resolver = ElementTypeResolver.For(typeof(T), options);
 
             stream.Seek(0, SeekOrigin.Begin);
             var header = string.Empty;
@@ -362,10 +399,7 @@ namespace Datamodel
 
             ICodec codec = GetCodec(encoding, encoding_version);
 
-            var typeNamespace = typeof(T).Namespace;
-            var typeAssembly = typeof(T).Assembly;
-
-            var dm = codec.Decode(encoding, encoding_version, format, format_version, stream, defer_mode, reflectionParams);
+            var dm = codec.Decode(encoding, encoding_version, format, format_version, stream, defer_mode, resolver);
             if (defer_mode == DeferredMode.Automatic && codec is IDeferredAttributeCodec deferredCodec)
             {
                 dm.Stream = stream;
@@ -378,7 +412,10 @@ namespace Datamodel
             dm.Encoding = encoding;
             dm.EncodingVersion = encoding_version;
 
-            dm.Root = (T?)dm.Root;
+            if (dm.Root is not null and not T)
+            {
+                throw new InvalidDataException($"The root element is a '{dm.Root.ClassName}' loaded as {dm.Root.GetType().Name}, not {typeof(T).Name}. Check that the class exists in the namespace used to load the file.");
+            }
 
             return dm;
         }
@@ -931,11 +968,11 @@ namespace Datamodel
     [Serializable]
     public class DestubException : Exception
     {
-        internal DestubException(Attribute attr, Exception innerException)
+        internal DestubException(AttributeList owner, string attributeName, Exception innerException)
             : base("An exception occured while destubbing the value of an attribute.", innerException)
         {
-            Data.Add("Element", ((Element?)attr.Owner)?.ID);
-            Data.Add("Attribute", attr.Name);
+            Data.Add("Element", (owner as Element)?.ID);
+            Data.Add("Attribute", attributeName);
         }
 
         internal DestubException(ElementArray array, int index, Exception innerException)
@@ -960,12 +997,4 @@ namespace Datamodel
     }
 
     #endregion
-
-    static class Extensions
-    {
-        public static Type MakeListType(this Type t)
-        {
-            return typeof(List<>).MakeGenericType(t);
-        }
-    }
 }

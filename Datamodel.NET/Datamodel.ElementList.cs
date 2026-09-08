@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Diagnostics;
 using System.Linq;
-using System.Threading;
 
 namespace Datamodel
 {
@@ -17,7 +16,7 @@ namespace Datamodel
         [DebuggerTypeProxy(typeof(DebugView))]
         public class ElementList : IEnumerable<Element>, INotifyCollectionChanged, IDisposable
         {
-            internal ReaderWriterLockSlim ChangeLock = new(LockRecursionPolicy.SupportsRecursion);
+            internal readonly object ChangeLock = new();
 
             internal class DebugView
             {
@@ -29,10 +28,12 @@ namespace Datamodel
                 private readonly ElementList Item;
 
                 [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
-                public Element[] Elements => Item.store.Values.Cast<Element>().ToArray();
+                public Element[] Elements => [.. Item.order];
             }
 
-            private readonly OrderedDictionary store = [];
+            // elements by ID, and in the order they were added, which codecs rely on
+            private readonly Dictionary<Guid, Element> byId = [];
+            private readonly List<Element> order = [];
             private readonly Datamodel Owner;
 
             internal ElementList(Datamodel owner)
@@ -40,13 +41,26 @@ namespace Datamodel
                 Owner = owner;
             }
 
+            /// <summary>Makes room for the given number of elements, so that a codec that knows the count adds them without growing the tables.</summary>
+            internal void EnsureCapacity(int count)
+            {
+                lock (ChangeLock)
+                {
+                    byId.EnsureCapacity(count);
+                    order.EnsureCapacity(count);
+                }
+            }
+
+            /// <summary>
+            /// Adds an Element owned by this list's Datamodel. The first Element added becomes the <see cref="Datamodel.Root"/>.
+            /// </summary>
             internal void Add(Element item)
             {
-                ChangeLock.EnterUpgradeableReadLock();
-                try
+                bool first;
+
+                lock (ChangeLock)
                 {
-                    Element? existing = (Element?)store[item.ID];
-                    if (existing != null && !existing.Stub)
+                    if (byId.TryGetValue(item.ID, out var existing) && !existing.Stub)
                     {
                         throw new ElementIdException($"Element ID {item.ID} already in use in this Datamodel.");
                     }
@@ -55,25 +69,27 @@ namespace Datamodel
                     if (item.Owner != this.Owner)
                         throw new ElementOwnershipException("Cannot add an element from a different Datamodel. Use ImportElement() to create a local copy instead.");
 
-                    ChangeLock.EnterWriteLock();
-                    try
-                    {
-                        if (existing != null)
-                            store.Remove(existing.ID);
+                    if (existing != null)
+                        RemoveFromStore(existing);
 
-                        store.Add(item.ID, item);
-                    }
-                    finally
-                    {
-                        ChangeLock.ExitWriteLock();
-                    }
+                    byId.Add(item.ID, item);
+                    order.Add(item);
+                    first = order.Count == 1;
                 }
-                finally
-                {
-                    ChangeLock.ExitUpgradeableReadLock();
-                }
+
+                if (first)
+                    Owner.Root = item;
 
                 CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Add, item));
+            }
+
+            /// <summary>
+            /// Removes an Element from both stores. The caller holds <see cref="ChangeLock"/>.
+            /// </summary>
+            void RemoveFromStore(Element item)
+            {
+                byId.Remove(item.ID);
+                order.Remove(item);
             }
 
             /// <summary>
@@ -86,12 +102,8 @@ namespace Datamodel
             {
                 get
                 {
-                    ChangeLock.EnterReadLock();
-                    try
-                    {
-                        return (Element?)store[index];
-                    }
-                    finally { ChangeLock.ExitReadLock(); }
+                    lock (ChangeLock)
+                        return order[index];
                 }
             }
 
@@ -104,12 +116,8 @@ namespace Datamodel
             {
                 get
                 {
-                    ChangeLock.EnterReadLock();
-                    try
-                    {
-                        return (Element?)store[id];
-                    }
-                    finally { ChangeLock.ExitReadLock(); }
+                    lock (ChangeLock)
+                        return byId.TryGetValue(id, out var element) ? element : null;
                 }
             }
 
@@ -120,12 +128,8 @@ namespace Datamodel
             {
                 get
                 {
-                    ChangeLock.EnterReadLock();
-                    try
-                    {
-                        return store.Count;
-                    }
-                    finally { ChangeLock.ExitReadLock(); }
+                    lock (ChangeLock)
+                        return order.Count;
                 }
             }
 
@@ -160,47 +164,36 @@ namespace Datamodel
             {
                 ArgumentNullException.ThrowIfNull(item);
 
-                ChangeLock.EnterUpgradeableReadLock();
-                try
+                lock (ChangeLock)
                 {
-                    if (store.Contains(item.ID))
+                    if (!byId.ContainsKey(item.ID))
+                        return false;
+
+                    RemoveFromStore(item);
+                    Element? replacement = (mode == RemoveMode.MakeStubs) ? new Element(Owner, item.ID) : null;
+
+                    foreach (var elem in order)
                     {
-                        ChangeLock.EnterWriteLock();
-                        try
+                        lock (elem.SyncRoot)
                         {
-                            store.Remove(item.ID);
-                            Element? replacement = (mode == RemoveMode.MakeStubs) ? new Element(Owner, item.ID) : null;
-
-                            foreach (Element elem in store.Values)
+                            foreach (var attr in elem.Where(a => a.Value == item).ToArray())
                             {
-                                lock (elem.SyncRoot)
-                                {
-                                    foreach (var attr in elem.Where(a => a.Value == item).ToArray())
-                                    {
-                                        elem[attr.Key] = replacement;
-                                    }
-
-                                    foreach (var array in elem.Select(a => a.Value).OfType<IList<Element?>>())
-                                        for (int i = 0; i < array.Count; i++)
-                                            if (array[i] == item)
-                                                array[i] = replacement;
-                                }
+                                elem[attr.Key] = replacement;
                             }
-                            if (Owner.Root == item) Owner.Root = replacement;
 
-                            item.Owner = null;
+                            foreach (var array in elem.Select(a => a.Value).OfType<IList<Element?>>())
+                                for (int i = 0; i < array.Count; i++)
+                                    if (array[i] == item)
+                                        array[i] = replacement;
                         }
-                        finally
-                        {
-                            ChangeLock.ExitWriteLock();
-                        }
-
-                        CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, item));
-                        return true;
                     }
-                    else return false;
+                    if (Owner.Root == item) Owner.Root = replacement;
+
+                    item.Owner = null;
                 }
-                finally { ChangeLock.ExitUpgradeableReadLock(); }
+
+                CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, item));
+                return true;
             }
 
             /// <summary>
@@ -208,20 +201,15 @@ namespace Datamodel
             /// </summary>
             internal void RemoveUnreferenced(Element item)
             {
-                ChangeLock.EnterWriteLock();
-                try
+                lock (ChangeLock)
                 {
-                    if (!store.Contains(item.ID))
+                    if (!byId.ContainsKey(item.ID))
                     {
                         return;
                     }
 
-                    store.Remove(item.ID);
+                    RemoveFromStore(item);
                     item.Owner = null;
-                }
-                finally
-                {
-                    ChangeLock.ExitWriteLock();
                 }
 
                 CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, item));
@@ -232,36 +220,20 @@ namespace Datamodel
             /// </summary>
             public void Trim()
             {
-                ChangeLock.EnterUpgradeableReadLock();
-                try
+                lock (ChangeLock)
                 {
                     var used = new HashSet<Element?>();
                     WalkElemTree(Owner.Root, used);
-                    if (used.Count == Count) return;
+                    if (used.Count == order.Count) return;
 
-                    ChangeLock.EnterWriteLock();
-                    try
+                    var removed = order.Where(elem => !used.Contains(elem)).ToArray();
+                    foreach (var elem in removed)
                     {
-                        var removed = this.Except(used).ToArray();
-                        foreach (var elem in removed)
-                        {
-                            if (elem != null)
-                            {
-                                store.Remove(elem.ID);
-                                elem.Owner = null;
-                            }
-                        }
+                        RemoveFromStore(elem);
+                        elem.Owner = null;
+                    }
 
-                        CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, removed));
-                    }
-                    finally
-                    {
-                        ChangeLock.ExitWriteLock();
-                    }
-                }
-                finally
-                {
-                    ChangeLock.ExitUpgradeableReadLock();
+                    CollectionChanged?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, removed));
                 }
             }
 
@@ -273,7 +245,7 @@ namespace Datamodel
                 }
 
                 found.Add(elem);
-                foreach (var value in elem.Inner.Values.Cast<Attribute>().Select(a => a.RawValue))
+                foreach (var value in elem.EnumerateReferences())
                 {
                     if (value is Element value_elem)
                     {
@@ -286,7 +258,7 @@ namespace Datamodel
                     }
                     if (value is ElementArray elem_array)
                     {
-                        foreach (var item in elem_array.RawList)
+                        foreach (var item in elem_array.RawItems)
                         {
                             if (item != null && found.Add(item))
                             {
@@ -300,15 +272,14 @@ namespace Datamodel
             #region Interfaces
             System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
             {
-                return store.GetEnumerator();
+                return GetEnumerator();
             }
             /// <summary>
-            /// Returns an Enumerator that iterates through the Elements in collection.
+            /// Returns an Enumerator that iterates through the Elements in collection, in the order they were added.
             /// </summary>
             public IEnumerator<Element> GetEnumerator()
             {
-                foreach (Element elem in store.Values)
-                    yield return elem;
+                return order.GetEnumerator();
             }
             /// <summary>
             /// Raised when an <see cref="Element"/> is added, removed, or replaced.
@@ -318,7 +289,6 @@ namespace Datamodel
 
             public void Dispose()
             {
-                ChangeLock.Dispose();
             }
         }
     }

@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Reflection;
 
 namespace Datamodel
 {
@@ -68,7 +67,7 @@ namespace Datamodel
         public Element()
             : base(null)
         {
-            ID = Guid.NewGuid();
+            // the ID is generated on first use, so that a codec constructing the Element and assigning the ID from the file does not pay for a random one
 
             // For subclasses get the actual classname
             if (GetType() != typeof(Element))
@@ -80,7 +79,7 @@ namespace Datamodel
                     type = type[..index];
                 }
 
-                ClassName = type;
+                ClassName = Schema.ClassName ?? type;
             }
         }
 
@@ -96,7 +95,26 @@ namespace Datamodel
         /// <see cref="GetHashCode"/>. Assign it before the Element joins a <see cref="Datamodel"/> or any other
         /// hash-based collection, because changing it afterwards strands the Element in its old bucket.
         /// </remarks>
-        public Guid ID { get; set; }
+        public Guid ID
+        {
+            get
+            {
+                if (!idAssigned)
+                {
+                    id = Guid.NewGuid();
+                    idAssigned = true;
+                }
+
+                return id;
+            }
+            set
+            {
+                id = value;
+                idAssigned = true;
+            }
+        }
+        Guid id;
+        bool idAssigned;
 
         /// <summary>
         /// Gets or sets the name of this Element.
@@ -149,59 +167,16 @@ namespace Datamodel
             {
                 if (value != null && base.Owner != null && base.Owner.AllElements.Contains(this)) throw new InvalidOperationException("Element already has an owner.");
                 base.Owner = value;
-                if (value != null)
-                {
-                    value.AllElements.ChangeLock.EnterWriteLock();
-                    try
-                    {
-                        value.AllElements.Add(this);
-                        if (value.AllElements.Count == 1) value.Root = this;
-                    }
-                    finally { value.AllElements.ChangeLock.ExitWriteLock(); }
-                }
+                value?.AllElements.Add(this);
             }
         }
 
         #endregion
 
-        #region Properties
-
-        /// <remarks>
-        /// This is expensive enough to dominate Element construction, so it must only ever be called once per
-        /// type. <see cref="AttributeList"/> caches the result; don't call it from a hot path.
-        /// </remarks>
-        protected override ICollection<(string Name, PropertyInfo Property)>? GetPropertyDerivedAttributeList()
-        {
-            var type = GetType();
-            if (type == typeof(Element))
-            {
-                return null; // The base class has no auto-properties
-            }
-
-            var properties = new List<(string Name, PropertyInfo Property)>();
-            foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
-            {
-                // Check if the property is an auto-property and is declared by a subclass of Element
-                var declaringType = property.DeclaringType!;
-
-                if (declaringType.IsSubclassOf(typeof(Element)))
-                {
-                    var name = property.Name;
-                    name = declaringType.GetCustomAttribute<Format.AttributeNamingConventionAttribute>()?.GetAttributeName(name, property.PropertyType) ?? name;
-                    name = property.GetCustomAttribute<Format.DMProperty>()?.Name ?? name;
-                    properties.Add((name, property));
-                }
-            }
-
-            return properties;
-        }
-
-        #endregion Properties
-
         /// <summary>
         /// Returns the value of the <see cref="Attribute"/> with the specified type and name. An exception is thrown there is no Attribute of the given name and type.
         /// </summary>
-        /// <seealso cref="GetArray&lt;T&gt;"/>
+        /// <seealso cref="GetArray{T}"/>
         /// <typeparam name="T">The expected Type of the Attribute.</typeparam>
         /// <param name="name">The Attribute name to search for.</param>
         /// <returns>The value of the Attribute with the given name.</returns>
@@ -221,12 +196,12 @@ namespace Datamodel
         /// <summary>
         /// Returns the value of the <see cref="Attribute"/> with the specified type and name, if it is an array. An exception is thrown there is no array Attribute of the given name and type.
         /// </summary>
-        /// <remarks>This is a convenience function that calls <see cref="Get&lt;T&gt;"/>.</remarks>
+        /// <remarks>This is a convenience function that calls <see cref="Get{T}"/>.</remarks>
         /// <typeparam name="T">The expected <see cref="Type"/> of the array's items.</typeparam>
         /// <param name="name">The name to search for.</param>
         /// <returns>The value of the Attribute with the given name.</returns>
         /// <exception cref="ArgumentNullException">Thrown when the value of name is null.</exception>
-        /// <exception cref="AttributeTypeException">Thrown when the value of the requested Attribute is not compatible with IList&lt;T&gt;.</exception>
+        /// <exception cref="AttributeTypeException">Thrown when the value of the requested Attribute is not compatible with <see cref="IList{T}"/>.</exception>
         /// <exception cref="KeyNotFoundException">Thrown when an attempt is made to get a name that is not present on this Element.</exception>
         public IList<T>? GetArray<T>(string name)
         {
@@ -377,8 +352,7 @@ namespace Datamodel
         /// <param name="offset">The location of the attribute's value in the Datamodel's source stream.</param>
         internal void Add(string key, long offset)
         {
-            lock (Attribute_ChangeLock)
-                Inner[key] = new Attribute(key, this, offset);
+            SetDeferred(key, offset);
         }
 
         public override bool ContainsKey(string key)
