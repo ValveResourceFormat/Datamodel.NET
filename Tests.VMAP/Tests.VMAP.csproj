@@ -2,7 +2,7 @@
 
   <!-- The vmap schema the tests and benchmarks load maps through. A project of its own, so that it is compiled once and loaded across an assembly boundary. -->
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
