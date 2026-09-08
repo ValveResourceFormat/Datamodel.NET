@@ -16,6 +16,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Datamodel.NET\Datamodel.NET.csproj" />
+    <ProjectReference Include="..\Tests.VMAP\Tests.VMAP.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.5.0" />

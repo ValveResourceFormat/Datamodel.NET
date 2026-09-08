@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The vmap schema the tests and benchmarks load maps through. A project of its own, so that it is compiled once and loaded across an assembly boundary. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Datamodel.NET\Datamodel.NET.csproj" />
+    <ProjectReference Include="..\ElementFactoryGenerator\ElementFactoryGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>
