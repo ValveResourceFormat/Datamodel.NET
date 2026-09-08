@@ -441,6 +441,10 @@ namespace Datamodel.Codecs
 
                 var num_attrs = Reader.ReadInt32();
 
+                // a plain element gets exactly the slots it needs; a class keeps most attributes in its properties, so its few slots grow as they come
+                if (elem.Schema.Properties.Count == 0)
+                    elem.EnsureCapacity(num_attrs);
+
                 for (var i = 0; i < num_attrs; i++)
                 {
                     var name = StringDict.ReadString(Reader);

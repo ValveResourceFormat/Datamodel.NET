@@ -178,6 +178,18 @@ namespace Datamodel
         /// <summary>
         /// Adds an empty slot with the given name at the end. The caller holds the lock.
         /// </summary>
+        /// <summary>
+        /// Makes room for the given number of attributes, so that a codec that knows the count adds them without growing the slots.
+        /// </summary>
+        internal void EnsureCapacity(int capacity)
+        {
+            lock (Attribute_ChangeLock)
+            {
+                if (slots == null || slots.Length < capacity)
+                    System.Array.Resize(ref slots, capacity);
+            }
+        }
+
         ref AttributeSlot Append(string name)
         {
             if (slots == null || count == slots.Length)
