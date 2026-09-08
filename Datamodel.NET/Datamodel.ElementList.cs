@@ -41,6 +41,16 @@ namespace Datamodel
                 Owner = owner;
             }
 
+            /// <summary>Makes room for the given number of elements, so that a codec that knows the count adds them without growing the tables.</summary>
+            internal void EnsureCapacity(int count)
+            {
+                lock (ChangeLock)
+                {
+                    byId.EnsureCapacity(count);
+                    order.EnsureCapacity(count);
+                }
+            }
+
             /// <summary>
             /// Adds an Element owned by this list's Datamodel. The first Element added becomes the <see cref="Datamodel.Root"/>.
             /// </summary>

@@ -147,7 +147,9 @@ namespace Datamodel.Codecs
                 Dummy = EncodingVersion == 1;
                 if (!Dummy)
                 {
-                    foreach (var i in Enumerable.Range(0, LengthSize == sizeof(short) ? reader.ReadInt16() : reader.ReadInt32()))
+                    var count = LengthSize == sizeof(short) ? reader.ReadInt16() : reader.ReadInt32();
+                    Strings.Capacity = count;
+                    for (var i = 0; i < count; i++)
                         AddString(Codec.ReadString_Raw(reader));
                 }
             }
@@ -422,13 +424,20 @@ namespace Datamodel.Codecs
             StringDict = new StringDictionary(this, Reader);
             var num_elements = Reader.ReadInt32();
 
+            // the file states how many elements follow, so the tables that hold them are sized once
+            ElementIndex.Capacity = num_elements;
+            dm.AllElements.EnsureCapacity(num_elements);
+
             // read index
-            foreach (var i in Enumerable.Range(0, num_elements))
+            Span<byte> id_bits = stackalloc byte[16];
+            for (var i = 0; i < num_elements; i++)
             {
                 var type = StringDict.ReadString(Reader);
                 var name = EncodingVersion >= 4 ? StringDict.ReadString(Reader) : ReadString_Raw(Reader);
-                var id_bits = Reader.ReadBytes(16);
-                var id = new Guid(BitConverter.IsLittleEndian ? id_bits : id_bits.Reverse().ToArray());
+                Reader.BaseStream.ReadExactly(id_bits);
+                if (!BitConverter.IsLittleEndian)
+                    id_bits.Reverse();
+                var id = new Guid(id_bits);
 
                 if (!CodecUtilities.TryConstructCustomElement(resolver, dm, type, name, id, out var elem))
                 {
@@ -448,7 +457,7 @@ namespace Datamodel.Codecs
 
                 var num_attrs = Reader.ReadInt32();
 
-                foreach (var i in Enumerable.Range(0, num_attrs))
+                for (var i = 0; i < num_attrs; i++)
                 {
                     var name = StringDict.ReadString(Reader);
                     if (defer_mode == DeferredMode.Automatic)
