@@ -102,7 +102,7 @@ namespace Datamodel
         /// <summary>
         /// Reads the property in the form an attribute slot stores it, so that a codec writes it without boxing when the binding is typed.
         /// </summary>
-        internal virtual void Read(AttributeList owner, out AttributeKind kind, out InlineValue inline, out object? reference)
+        internal virtual void Read(AttributeList owner, out AttributeType kind, out InlineValue inline, out object? reference)
         {
             AttributeList.Classify(GetValue(owner), out kind, out inline, out reference);
         }
@@ -155,23 +155,22 @@ namespace Datamodel
 
         public override TValue Get(AttributeList owner) => getter((TElement)owner);
 
-        /// <summary>The kind a slot stores values of <typeparamref name="TValue"/> as, decided once per type.</summary>
-        static readonly AttributeKind ValueKind = AttributeList.KindOf(typeof(TValue));
+        /// <summary>The type a slot stores values of <typeparamref name="TValue"/> as when they are stored inline, decided once per type; null for the reference types, which are classified per value.</summary>
+        static readonly AttributeType? ValueKind = AttributeList.KindOf(typeof(TValue));
 
-        internal override void Read(AttributeList owner, out AttributeKind kind, out InlineValue inline, out object? reference)
+        internal override void Read(AttributeList owner, out AttributeType kind, out InlineValue inline, out object? reference)
         {
             var value = getter((TElement)owner);
-            kind = ValueKind;
-            inline = default;
-            if (ValueKind == AttributeKind.Reference)
+            if (ValueKind is AttributeType inlineKind)
             {
-                reference = value;
-            }
-            else
-            {
+                kind = inlineKind;
                 reference = null;
+                inline = default;
                 Unsafe.As<InlineValue, TValue>(ref inline) = value;
+                return;
             }
+
+            AttributeList.Classify(value, out kind, out inline, out reference);
         }
 
         public override void Set(AttributeList owner, TValue value)

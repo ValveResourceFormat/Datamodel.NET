@@ -15,7 +15,8 @@ namespace Datamodel.Codecs
 {
     class Binary : IDeferredAttributeCodec
     {
-        static readonly Dictionary<int, Type?[]> SupportedAttributes = [];
+        /// <summary>The types each encoding version supports, in the order of their ids. A null marks an id the version reserves for something the library does not read.</summary>
+        static readonly Dictionary<int, AttributeType?[]> SupportedAttributes = [];
         BinaryReader? Reader;
 
         /// <summary>
@@ -32,20 +33,54 @@ namespace Datamodel.Codecs
         {
             SupportedAttributes[1] =
             SupportedAttributes[2] = [
-                typeof(Element), typeof(int), typeof(float), typeof(bool), typeof(string), typeof(byte[]),
-                null /* ObjectID */, typeof(Color), typeof(Vector2), typeof(Vector3), typeof(Vector4), typeof(Vector3) /* angle*/, typeof(Quaternion), typeof(Matrix4x4)
+                AttributeType.Element, AttributeType.Int, AttributeType.Float, AttributeType.Bool, AttributeType.String, AttributeType.Binary,
+                null /* ObjectID */, AttributeType.Color, AttributeType.Vector2, AttributeType.Vector3, AttributeType.Vector4, AttributeType.Vector3 /* angle */, AttributeType.Quaternion, AttributeType.Matrix
             ];
+
             SupportedAttributes[3] =
             SupportedAttributes[4] =
             SupportedAttributes[5] = [
-                typeof(Element), typeof(int), typeof(float), typeof(bool), typeof(string), typeof(byte[]),
-                typeof(TimeSpan), typeof(Color), typeof(Vector2), typeof(Vector3), typeof(Vector4), typeof(Vector3) /* angle*/, typeof(Quaternion), typeof(Matrix4x4)
+                AttributeType.Element, AttributeType.Int, AttributeType.Float, AttributeType.Bool, AttributeType.String, AttributeType.Binary,
+                AttributeType.Time, AttributeType.Color, AttributeType.Vector2, AttributeType.Vector3, AttributeType.Vector4, AttributeType.Vector3 /* angle */, AttributeType.Quaternion, AttributeType.Matrix
             ];
+
             SupportedAttributes[9] = [
-                typeof(Element), typeof(int), typeof(float), typeof(bool), typeof(string), typeof(byte[]),
-                typeof(TimeSpan), typeof(Color), typeof(Vector2), typeof(Vector3), typeof(Vector4), typeof(QAngle), typeof(Quaternion), typeof(Matrix4x4),
-                typeof(ulong), typeof(byte)
+                AttributeType.Element, AttributeType.Int, AttributeType.Float, AttributeType.Bool, AttributeType.String, AttributeType.Binary,
+                AttributeType.Time, AttributeType.Color, AttributeType.Vector2, AttributeType.Vector3, AttributeType.Vector4, AttributeType.QAngle, AttributeType.Quaternion, AttributeType.Matrix,
+                AttributeType.UInt64, AttributeType.Byte
             ];
+        }
+
+        /// <summary>The CLR type a value of the given type is stored as.</summary>
+        static Type ClrType(AttributeType type) => type switch
+        {
+            AttributeType.Element => typeof(Element),
+            AttributeType.Int => typeof(int),
+            AttributeType.Float => typeof(float),
+            AttributeType.Bool => typeof(bool),
+            AttributeType.String => typeof(string),
+            AttributeType.Binary => typeof(byte[]),
+            AttributeType.Time => typeof(TimeSpan),
+            AttributeType.Color => typeof(Color),
+            AttributeType.Vector2 => typeof(Vector2),
+            AttributeType.Vector3 => typeof(Vector3),
+            AttributeType.Vector4 => typeof(Vector4),
+            AttributeType.QAngle => typeof(QAngle),
+            AttributeType.Quaternion => typeof(Quaternion),
+            AttributeType.Matrix => typeof(Matrix4x4),
+            AttributeType.UInt64 => typeof(ulong),
+            AttributeType.Byte => typeof(byte),
+            _ => throw new ArgumentOutOfRangeException(nameof(type)),
+        };
+
+        /// <summary>The id a version writes for a value type.</summary>
+        static byte TypeToId(AttributeType type, int version)
+        {
+            var index = System.Array.IndexOf(SupportedAttributes[version], (AttributeType?)type);
+            if (index < 0)
+                throw new CodecException($"\"{type}\" is not supported in encoding binary {version}");
+
+            return (byte)(index + 1);
         }
 
         static byte TypeToId(Type type, int version)
@@ -54,7 +89,7 @@ namespace Datamodel.Codecs
             bool array = type != typeof(byte[]) && Datamodel.IsDatamodelArrayType(type);
             var search_type = array ? Datamodel.GetArrayInnerType(type) : type;
 
-            if (array && search_type == typeof(byte) && !SupportedAttributes[version].Contains(typeof(byte)))
+            if (array && search_type == typeof(byte) && !SupportedAttributes[version].Contains(AttributeType.Byte))
             {
                 search_type = typeof(byte[]); // Recent version of DMX support both "binary" and "uint8_array" attributes. These are the same thing!
                 array = false;
@@ -63,10 +98,10 @@ namespace Datamodel.Codecs
             byte i = 0;
             foreach (var list_type in type_list)
             {
-                if (list_type == typeof(Element) && type.IsSubclassOf(typeof(Element)))
+                if (list_type == AttributeType.Element && type.IsSubclassOf(typeof(Element)))
                     break;
 
-                if (list_type == search_type)
+                if (list_type is AttributeType known && ClrType(known) == search_type)
                     break;
                 i++;
             }
@@ -79,7 +114,7 @@ namespace Datamodel.Codecs
         /// <summary>
         /// Maps a type id of the stream to the attribute type, or to the item type when the id denotes an array.
         /// </summary>
-        (Type Type, bool IsArray) IdToType(byte id)
+        (AttributeType Type, bool IsArray) IdToType(byte id)
         {
             var type_list = SupportedAttributes[EncodingVersion];
             bool array = false;
@@ -100,7 +135,7 @@ namespace Datamodel.Codecs
                 }
             }
 
-            if (id >= type_list.Length || type_list[id] is not Type type)
+            if (id >= type_list.Length || type_list[id] is not AttributeType type)
             {
                 throw new CodecException(String.Format("Unrecognised attribute type: {0}", id + 1));
             }
@@ -262,47 +297,27 @@ namespace Datamodel.Codecs
             output.Flush();
         }
 
-        private static readonly Dictionary<RuntimeTypeHandle, int> TypeMap = new Dictionary<RuntimeTypeHandle, int>
-        {
-            { typeof(Element).TypeHandle, 0 },
-            { typeof(int).TypeHandle, 1 },
-            { typeof(float).TypeHandle, 2 },
-            { typeof(bool).TypeHandle, 3 },
-            { typeof(string).TypeHandle, 4 },
-            { typeof(byte[]).TypeHandle, 5 },
-            { typeof(TimeSpan).TypeHandle, 6 },
-            { typeof(Color).TypeHandle, 7 },
-            { typeof(Vector2).TypeHandle, 8 },
-            { typeof(Vector3).TypeHandle, 9 },
-            { typeof(QAngle).TypeHandle, 10 },
-            { typeof(Vector4).TypeHandle, 11 },
-            { typeof(Quaternion).TypeHandle, 12 },
-            { typeof(Matrix4x4).TypeHandle, 13 },
-            { typeof(byte).TypeHandle, 14 },
-            { typeof(UInt64).TypeHandle, 15 }
-        };
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        object? ReadValue(Datamodel dm, int typeIndex, bool raw_string, BinaryReader reader)
+        object? ReadValue(Datamodel dm, AttributeType type, bool raw_string, BinaryReader reader)
         {
-            return typeIndex switch
+            return type switch
             {
-                0 => ReadElement(dm, reader),
-                1 => reader.ReadInt32(),
-                2 => reader.ReadSingle(),
-                3 => reader.ReadBoolean(),
-                4 => raw_string ? ReadString_Raw(reader) : StringDict!.ReadString(reader),
-                5 => reader.ReadBytes(reader.ReadInt32()),
-                6 => TimeSpan.FromTicks(reader.ReadInt32() * (TimeSpan.TicksPerSecond / DatamodelTicksPerSecond)),
-                7 => ReadColor(reader),
-                8 => ReadVector2(reader),
-                9 => ReadVector3(reader),
-                10 => ReadQAngle(reader),
-                11 => ReadVector4(reader),
-                12 => ReadQuaternion(reader),
-                13 => ReadMatrix4x4(reader),
-                14 => reader.ReadByte(),
-                15 => reader.ReadUInt64(),
+                AttributeType.Element => ReadElement(dm, reader),
+                AttributeType.Int => reader.ReadInt32(),
+                AttributeType.Float => reader.ReadSingle(),
+                AttributeType.Bool => reader.ReadBoolean(),
+                AttributeType.String => raw_string ? ReadString_Raw(reader) : StringDict!.ReadString(reader),
+                AttributeType.Binary => reader.ReadBytes(reader.ReadInt32()),
+                AttributeType.Time => TimeSpan.FromTicks(reader.ReadInt32() * (TimeSpan.TicksPerSecond / DatamodelTicksPerSecond)),
+                AttributeType.Color => ReadColor(reader),
+                AttributeType.Vector2 => ReadVector2(reader),
+                AttributeType.Vector3 => ReadVector3(reader),
+                AttributeType.QAngle => ReadQAngle(reader),
+                AttributeType.Vector4 => ReadVector4(reader),
+                AttributeType.Quaternion => ReadQuaternion(reader),
+                AttributeType.Matrix => ReadMatrix4x4(reader),
+                AttributeType.Byte => reader.ReadByte(),
+                AttributeType.UInt64 => reader.ReadUInt64(),
                 _ => throw new ArgumentException("Cannot read value of type")
             };
         }
@@ -496,7 +511,7 @@ namespace Datamodel.Codecs
             var (type, isArray) = IdToType(reader.ReadByte());
 
             if (!isArray)
-                return ReadValue(dm, TypeMap[type.TypeHandle], EncodingVersion < 4 || prefix, reader);
+                return ReadValue(dm, type, EncodingVersion < 4 || prefix, reader);
 
             return ReadArray(dm, type, reader.ReadInt32(), reader);
         }
@@ -514,24 +529,24 @@ namespace Datamodel.Codecs
                 return;
             }
 
-            switch (TypeMap[type.TypeHandle])
+            switch (type)
             {
-                case 0: target[name] = ReadElement(dm, reader); break;
-                case 1: target.Set(name, reader.ReadInt32()); break;
-                case 2: target.Set(name, reader.ReadSingle()); break;
-                case 3: target.Set(name, reader.ReadBoolean()); break;
-                case 4: target[name] = EncodingVersion < 4 ? ReadString_Raw(reader) : StringDict!.ReadString(reader); break;
-                case 5: target[name] = reader.ReadBytes(reader.ReadInt32()); break;
-                case 6: target.Set(name, TimeSpan.FromTicks(reader.ReadInt32() * (TimeSpan.TicksPerSecond / DatamodelTicksPerSecond))); break;
-                case 7: target.Set(name, ReadColor(reader)); break;
-                case 8: target.Set(name, ReadVector2(reader)); break;
-                case 9: target.Set(name, ReadVector3(reader)); break;
-                case 10: target.Set(name, ReadQAngle(reader)); break;
-                case 11: target.Set(name, ReadVector4(reader)); break;
-                case 12: target.Set(name, ReadQuaternion(reader)); break;
-                case 13: target[name] = ReadMatrix4x4(reader); break;
-                case 14: target.Set(name, reader.ReadByte()); break;
-                case 15: target.Set(name, reader.ReadUInt64()); break;
+                case AttributeType.Element: target[name] = ReadElement(dm, reader); break;
+                case AttributeType.Int: target.Set(name, reader.ReadInt32()); break;
+                case AttributeType.Float: target.Set(name, reader.ReadSingle()); break;
+                case AttributeType.Bool: target.Set(name, reader.ReadBoolean()); break;
+                case AttributeType.String: target[name] = EncodingVersion < 4 ? ReadString_Raw(reader) : StringDict!.ReadString(reader); break;
+                case AttributeType.Binary: target[name] = reader.ReadBytes(reader.ReadInt32()); break;
+                case AttributeType.Time: target.Set(name, TimeSpan.FromTicks(reader.ReadInt32() * (TimeSpan.TicksPerSecond / DatamodelTicksPerSecond))); break;
+                case AttributeType.Color: target.Set(name, ReadColor(reader)); break;
+                case AttributeType.Vector2: target.Set(name, ReadVector2(reader)); break;
+                case AttributeType.Vector3: target.Set(name, ReadVector3(reader)); break;
+                case AttributeType.QAngle: target.Set(name, ReadQAngle(reader)); break;
+                case AttributeType.Vector4: target.Set(name, ReadVector4(reader)); break;
+                case AttributeType.Quaternion: target.Set(name, ReadQuaternion(reader)); break;
+                case AttributeType.Matrix: target[name] = ReadMatrix4x4(reader); break;
+                case AttributeType.Byte: target.Set(name, reader.ReadByte()); break;
+                case AttributeType.UInt64: target.Set(name, reader.ReadUInt64()); break;
                 default: throw new ArgumentException("Cannot read value of type");
             }
         }
@@ -545,31 +560,29 @@ namespace Datamodel.Codecs
         /// Reads an array attribute. Value types whose memory layout matches the stream are copied in one read into a slice of a shared chunk,
         /// instead of one boxed item at a time into a list of their own.
         /// </summary>
-        System.Collections.IList ReadArray(Datamodel dm, Type type, int count, BinaryReader reader)
+        System.Collections.IList ReadArray(Datamodel dm, AttributeType type, int count, BinaryReader reader)
         {
-            var typeId = TypeMap[type.TypeHandle];
-
             if (BitConverter.IsLittleEndian && count > 0)
             {
-                switch (typeId)
+                switch (type)
                 {
-                    case 1: { var (buffer, offset) = ReadChunk<int>(count, reader); return new IntArray(buffer, offset, count); }
-                    case 2: { var (buffer, offset) = ReadChunk<float>(count, reader); return new FloatArray(buffer, offset, count); }
-                    case 3: { var (buffer, offset) = ReadChunk<bool>(count, reader); return new BoolArray(buffer, offset, count); }
-                    case 7: { var (buffer, offset) = ReadChunk<Color>(count, reader); return new ColorArray(buffer, offset, count); }
-                    case 8: { var (buffer, offset) = ReadChunk<Vector2>(count, reader); return new Vector2Array(buffer, offset, count); }
-                    case 9: { var (buffer, offset) = ReadChunk<Vector3>(count, reader); return new Vector3Array(buffer, offset, count); }
-                    case 11: { var (buffer, offset) = ReadChunk<Vector4>(count, reader); return new Vector4Array(buffer, offset, count); }
-                    case 12: { var (buffer, offset) = ReadChunk<Quaternion>(count, reader); return new QuaternionArray(buffer, offset, count); }
-                    case 13: { var (buffer, offset) = ReadChunk<Matrix4x4>(count, reader); return new MatrixArray(buffer, offset, count); }
-                    case 14: { var (buffer, offset) = ReadChunk<byte>(count, reader); return new ByteArray(buffer, offset, count); }
-                    case 15: { var (buffer, offset) = ReadChunk<ulong>(count, reader); return new UInt64Array(buffer, offset, count); }
+                    case AttributeType.Int: { var (buffer, offset) = ReadChunk<int>(count, reader); return new IntArray(buffer, offset, count); }
+                    case AttributeType.Float: { var (buffer, offset) = ReadChunk<float>(count, reader); return new FloatArray(buffer, offset, count); }
+                    case AttributeType.Bool: { var (buffer, offset) = ReadChunk<bool>(count, reader); return new BoolArray(buffer, offset, count); }
+                    case AttributeType.Color: { var (buffer, offset) = ReadChunk<Color>(count, reader); return new ColorArray(buffer, offset, count); }
+                    case AttributeType.Vector2: { var (buffer, offset) = ReadChunk<Vector2>(count, reader); return new Vector2Array(buffer, offset, count); }
+                    case AttributeType.Vector3: { var (buffer, offset) = ReadChunk<Vector3>(count, reader); return new Vector3Array(buffer, offset, count); }
+                    case AttributeType.Vector4: { var (buffer, offset) = ReadChunk<Vector4>(count, reader); return new Vector4Array(buffer, offset, count); }
+                    case AttributeType.Quaternion: { var (buffer, offset) = ReadChunk<Quaternion>(count, reader); return new QuaternionArray(buffer, offset, count); }
+                    case AttributeType.Matrix: { var (buffer, offset) = ReadChunk<Matrix4x4>(count, reader); return new MatrixArray(buffer, offset, count); }
+                    case AttributeType.Byte: { var (buffer, offset) = ReadChunk<byte>(count, reader); return new ByteArray(buffer, offset, count); }
+                    case AttributeType.UInt64: { var (buffer, offset) = ReadChunk<ulong>(count, reader); return new UInt64Array(buffer, offset, count); }
                 }
             }
 
-            var array = CodecUtilities.MakeList(type, count);
+            var array = CodecUtilities.MakeList(ClrType(type), count);
             for (var i = 0; i < count; i++)
-                array.Add(ReadValue(dm, typeId, true, reader));
+                array.Add(ReadValue(dm, type, true, reader));
 
             return array;
         }
@@ -592,59 +605,60 @@ namespace Datamodel.Codecs
                 count = reader.ReadInt32();
             }
 
-            if (type == typeof(Element))
-            {
-                foreach (int i in Enumerable.Range(0, count))
-                    if (reader.ReadInt32() == -2) reader.BaseStream.Seek(37, SeekOrigin.Current); // skip GUID + null terminator if a stub
-                return;
-            }
-
             int length;
+            switch (type)
+            {
+                case AttributeType.Element:
+                    for (var i = 0; i < count; i++)
+                        if (reader.ReadInt32() == -2) reader.BaseStream.Seek(37, SeekOrigin.Current); // skip GUID + null terminator if a stub
+                    return;
+                case AttributeType.Binary:
+                    for (var i = 0; i < count; i++)
+                        reader.BaseStream.Seek(reader.ReadInt32(), SeekOrigin.Current);
+                    return;
+                case AttributeType.String:
+                    if (!StringDict!.Dummy && !isArray && EncodingVersion >= 4)
+                    {
+                        length = StringDict.IndiceSize;
+                        break;
+                    }
 
-            if (type == typeof(TimeSpan))
-                length = sizeof(int);
-            else if (type == typeof(Color))
-                length = 4;
-            else if (type == typeof(bool))
-                length = 1;
-            else if (type == typeof(byte[]))
-            {
-                foreach (var i in Enumerable.Range(0, count))
-                    reader.BaseStream.Seek(reader.ReadInt32(), SeekOrigin.Current);
-                return;
-            }
-            else if (type == typeof(string))
-            {
-                if (!StringDict!.Dummy && !isArray && EncodingVersion >= 4)
-                    length = StringDict.IndiceSize;
-                else
-                {
-                    foreach (var i in Enumerable.Range(0, count))
+                    for (var i = 0; i < count; i++)
                     {
                         byte b;
                         do { b = reader.ReadByte(); } while (b != 0);
                     }
                     return;
-                }
+                case AttributeType.Bool:
+                case AttributeType.Byte:
+                    length = 1;
+                    break;
+                case AttributeType.Int:
+                case AttributeType.Float:
+                case AttributeType.Time:
+                case AttributeType.Color:
+                    length = 4;
+                    break;
+                case AttributeType.Vector2:
+                    length = sizeof(float) * 2;
+                    break;
+                case AttributeType.Vector3:
+                case AttributeType.QAngle:
+                    length = sizeof(float) * 3;
+                    break;
+                case AttributeType.Vector4:
+                case AttributeType.Quaternion:
+                    length = sizeof(float) * 4;
+                    break;
+                case AttributeType.UInt64:
+                    length = sizeof(ulong);
+                    break;
+                case AttributeType.Matrix:
+                    length = sizeof(float) * 4 * 4;
+                    break;
+                default:
+                    throw new CodecException($"Cannot skip an attribute of type {type}.");
             }
-            else if (type == typeof(Vector2))
-                length = sizeof(float) * 2;
-            else if (type == typeof(Vector3))
-                length = sizeof(float) * 3;
-            else if (type == typeof(Vector4) || type == typeof(Quaternion))
-                length = sizeof(float) * 4;
-            else if (type == typeof(Matrix4x4))
-                length = sizeof(float) * 4 * 4;
-            else if (type == typeof(QAngle))
-                length = sizeof(float) * 3;
-            else if (type == typeof(int) || type == typeof(float))
-                length = 4;
-            else if (type == typeof(byte))
-                length = sizeof(byte);
-            else if (type == typeof(ulong))
-                length = sizeof(ulong);
-            else
-                throw new CodecException($"Cannot skip an attribute of type {type.Name}.");
 
             reader.BaseStream.Seek(length * count, SeekOrigin.Current);
         }
@@ -665,9 +679,8 @@ namespace Datamodel.Codecs
             readonly Dictionary<Element, int> Indices = [];
 
             /// <summary>Type ids of the inline kinds, filled in as they are met, since a version may not support every kind.</summary>
-            readonly byte[] KindIds = new byte[16];
+            readonly byte[] KindIds = new byte[(int)AttributeType.Deferred + 1];
             readonly Dictionary<Type, byte> ArrayIds = [];
-            readonly byte ElementId, StringId, BinaryId, MatrixId;
 
             public Encoder(OutputBuffer writer, Datamodel dm, int version)
             {
@@ -675,10 +688,6 @@ namespace Datamodel.Codecs
                 Writer = writer;
                 Datamodel = dm;
                 StringDict = new StringDictionary(version);
-                ElementId = TypeToId(typeof(Element), version);
-                StringId = TypeToId(typeof(string), version);
-                BinaryId = TypeToId(typeof(byte[]), version);
-                MatrixId = TypeToId(typeof(Matrix4x4), version);
             }
 
             public void Encode()
@@ -762,7 +771,7 @@ namespace Datamodel.Codecs
                 {
                 }
 
-                public void Visit(string name, AttributeKind kind, in InlineValue inline, object? reference)
+                public void Visit(string name, AttributeType kind, in InlineValue inline, object? reference)
                 {
                     encoder.StringDict.AddName(name);
 
@@ -818,7 +827,7 @@ namespace Datamodel.Codecs
                     encoder.Writer.Write(count);
                 }
 
-                public void Visit(string name, AttributeKind kind, in InlineValue inline, object? reference)
+                public void Visit(string name, AttributeType kind, in InlineValue inline, object? reference)
                 {
                     encoder.StringDict.WriteName(name, encoder.Writer);
                     encoder.WriteValue(kind, in inline, reference, rawStrings: false);
@@ -829,43 +838,40 @@ namespace Datamodel.Codecs
             /// Writes the type id of a value and the value itself.
             /// </summary>
             /// <param name="rawStrings">Whether a string is written in place rather than as an index into the table, as the prefix attributes and array items are.</param>
-            void WriteValue(AttributeKind kind, in InlineValue inline, object? reference, bool rawStrings)
+            void WriteValue(AttributeType kind, in InlineValue inline, object? reference, bool rawStrings)
             {
-                if (kind != AttributeKind.Reference)
+                switch (kind)
                 {
-                    Writer.Write(IdOf(kind));
-                    WriteInline(kind, in inline);
-                    return;
-                }
-
-                switch (reference)
-                {
-                    case null:
-                        Writer.Write(ElementId);
-                        Writer.Write(-1);
+                    case AttributeType.Element:
+                        Writer.Write(IdOf(kind));
+                        if (reference is Element elem)
+                            WriteElement(elem);
+                        else
+                            Writer.Write(-1);
                         return;
-                    case Element elem:
-                        Writer.Write(ElementId);
-                        WriteElement(elem);
+                    case AttributeType.String:
+                        Writer.Write(IdOf(kind));
+                        WriteString((string)reference!, rawStrings);
                         return;
-                    case string stringValue:
-                        Writer.Write(StringId);
-                        WriteString(stringValue, rawStrings);
-                        return;
-                    case byte[] binary:
-                        Writer.Write(BinaryId);
+                    case AttributeType.Binary:
+                        Writer.Write(IdOf(kind));
+                        var binary = (byte[])reference!;
                         Writer.Write(binary.Length);
                         Writer.Write(binary);
                         return;
-                    case Matrix4x4 matrix:
-                        Writer.Write(MatrixId);
-                        WriteMatrix(in matrix);
+                    case AttributeType.Matrix:
+                        Writer.Write(IdOf(kind));
+                        WriteMatrix((Matrix4x4)reference!);
                         return;
-                    case IList array:
-                        WriteArray(array);
+                    case AttributeType.Array:
+                        WriteArray((IList)reference!);
                         return;
+                    case AttributeType.Deferred:
+                        throw new InvalidOperationException("A deferred attribute was not loaded before being written.");
                     default:
-                        throw new InvalidOperationException("Unrecognised output Type.");
+                        Writer.Write(IdOf(kind));
+                        WriteInline(kind, in inline);
+                        return;
                 }
             }
 
@@ -925,23 +931,31 @@ namespace Datamodel.Codecs
                 foreach (var item in array)
                 {
                     AttributeList.Classify(item, out var kind, out var inline, out var reference);
-                    if (kind != AttributeKind.Reference)
-                        WriteInline(kind, in inline);
-                    else if (reference == null)
-                        Writer.Write(-1);
-                    else if (reference is Element elem)
-                        WriteElement(elem);
-                    else if (reference is string stringValue)
-                        Writer.Write(stringValue);
-                    else if (reference is byte[] binary)
+                    switch (kind)
                     {
-                        Writer.Write(binary.Length);
-                        Writer.Write(binary);
+                        case AttributeType.Element:
+                            if (reference is Element elem)
+                                WriteElement(elem);
+                            else
+                                Writer.Write(-1);
+                            break;
+                        case AttributeType.String:
+                            Writer.Write((string)reference!);
+                            break;
+                        case AttributeType.Binary:
+                            var binary = (byte[])reference!;
+                            Writer.Write(binary.Length);
+                            Writer.Write(binary);
+                            break;
+                        case AttributeType.Matrix:
+                            WriteMatrix((Matrix4x4)reference!);
+                            break;
+                        case AttributeType.Array:
+                            throw new InvalidOperationException("Unrecognised output Type.");
+                        default:
+                            WriteInline(kind, in inline);
+                            break;
                     }
-                    else if (reference is Matrix4x4 matrix)
-                        WriteMatrix(in matrix);
-                    else
-                        throw new InvalidOperationException("Unrecognised output Type.");
                 }
             }
 
@@ -959,50 +973,50 @@ namespace Datamodel.Codecs
                 foreach (var item in items)
                 {
                     AttributeList.Classify(item, out var kind, out var inline, out var reference);
-                    if (kind != AttributeKind.Reference)
-                        WriteInline(kind, in inline);
-                    else
+                    if (kind == AttributeType.Matrix)
                         WriteMatrix((Matrix4x4)reference!);
+                    else
+                        WriteInline(kind, in inline);
                 }
             }
 
-            void WriteInline(AttributeKind kind, in InlineValue inline)
+            void WriteInline(AttributeType kind, in InlineValue inline)
             {
                 switch (kind)
                 {
-                    case AttributeKind.Int: Writer.Write(inline.Int); return;
-                    case AttributeKind.Float: Writer.Write(inline.Float); return;
-                    case AttributeKind.Bool: Writer.Write(inline.Bool ? (byte)1 : (byte)0); return;
-                    case AttributeKind.Byte: Writer.Write(inline.Byte); return;
-                    case AttributeKind.UInt64: Writer.Write(inline.UInt64); return;
-                    case AttributeKind.Time: Writer.Write(ToTicks(TimeSpan.FromTicks(inline.Ticks))); return;
-                    case AttributeKind.Color:
+                    case AttributeType.Int: Writer.Write(inline.Int); return;
+                    case AttributeType.Float: Writer.Write(inline.Float); return;
+                    case AttributeType.Bool: Writer.Write(inline.Bool ? (byte)1 : (byte)0); return;
+                    case AttributeType.Byte: Writer.Write(inline.Byte); return;
+                    case AttributeType.UInt64: Writer.Write(inline.UInt64); return;
+                    case AttributeType.Time: Writer.Write(ToTicks(TimeSpan.FromTicks(inline.Ticks))); return;
+                    case AttributeType.Color:
                         Writer.Write(inline.Color.R);
                         Writer.Write(inline.Color.G);
                         Writer.Write(inline.Color.B);
                         Writer.Write(inline.Color.A);
                         return;
-                    case AttributeKind.Vector2:
+                    case AttributeType.Vector2:
                         Writer.Write(inline.Vector2.X);
                         Writer.Write(inline.Vector2.Y);
                         return;
-                    case AttributeKind.Vector3:
+                    case AttributeType.Vector3:
                         Writer.Write(inline.Vector3.X);
                         Writer.Write(inline.Vector3.Y);
                         Writer.Write(inline.Vector3.Z);
                         return;
-                    case AttributeKind.QAngle:
+                    case AttributeType.QAngle:
                         Writer.Write(inline.QAngle.Pitch);
                         Writer.Write(inline.QAngle.Yaw);
                         Writer.Write(inline.QAngle.Roll);
                         return;
-                    case AttributeKind.Vector4:
+                    case AttributeType.Vector4:
                         Writer.Write(inline.Vector4.X);
                         Writer.Write(inline.Vector4.Y);
                         Writer.Write(inline.Vector4.Z);
                         Writer.Write(inline.Vector4.W);
                         return;
-                    case AttributeKind.Quaternion:
+                    case AttributeType.Quaternion:
                         Writer.Write(inline.Quaternion.X);
                         Writer.Write(inline.Quaternion.Y);
                         Writer.Write(inline.Quaternion.Z);
@@ -1056,11 +1070,11 @@ namespace Datamodel.Codecs
 
             static int ToTicks(TimeSpan time) => (int)(time.Ticks / (TimeSpan.TicksPerSecond / DatamodelTicksPerSecond));
 
-            byte IdOf(AttributeKind kind)
+            byte IdOf(AttributeType kind)
             {
                 ref var id = ref KindIds[(int)kind];
                 if (id == 0)
-                    id = TypeToId(TypeOf(kind), EncodingVersion);
+                    id = TypeToId(kind, EncodingVersion);
                 return id;
             }
 
@@ -1071,22 +1085,6 @@ namespace Datamodel.Codecs
                 return id;
             }
 
-            static Type TypeOf(AttributeKind kind) => kind switch
-            {
-                AttributeKind.Int => typeof(int),
-                AttributeKind.Float => typeof(float),
-                AttributeKind.Bool => typeof(bool),
-                AttributeKind.Byte => typeof(byte),
-                AttributeKind.UInt64 => typeof(ulong),
-                AttributeKind.Time => typeof(TimeSpan),
-                AttributeKind.Color => typeof(Color),
-                AttributeKind.Vector2 => typeof(Vector2),
-                AttributeKind.Vector3 => typeof(Vector3),
-                AttributeKind.Vector4 => typeof(Vector4),
-                AttributeKind.Quaternion => typeof(Quaternion),
-                AttributeKind.QAngle => typeof(QAngle),
-                _ => throw new InvalidOperationException("Unrecognised output Type."),
-            };
         }
 
         /// <summary>

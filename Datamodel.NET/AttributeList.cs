@@ -16,25 +16,31 @@ using AttrKVP = System.Collections.Generic.KeyValuePair<string, object?>;
 namespace Datamodel
 {
     /// <summary>
-    /// What an <see cref="AttributeSlot"/> holds inline. <see cref="Reference"/> covers everything stored as an object: strings, binary blobs, matrices, elements, arrays and null.
+    /// The types an attribute value can have, named as Valve's DmAttributeType_t names them: what a slot stores, what a class property is read as
+    /// and what the binary encoding writes. Values of the scalar and vector types live in the slot itself, see <see cref="AttributeList.IsInline"/>; the rest are held as references.
     /// </summary>
-    enum AttributeKind : byte
+    enum AttributeType : byte
     {
-        Reference,
-        /// <summary>The value has not been read from the stream yet; <see cref="InlineValue.Ticks"/> holds the position it starts at.</summary>
-        Deferred,
+        Element,
         Int,
         Float,
         Bool,
-        Byte,
-        UInt64,
+        String,
+        Binary,
         Time,
         Color,
         Vector2,
         Vector3,
         Vector4,
-        Quaternion,
         QAngle,
+        Quaternion,
+        Matrix,
+        UInt64,
+        Byte,
+        /// <summary>An array of any of the above.</summary>
+        Array,
+        /// <summary>The value has not been read from the stream yet; <see cref="InlineValue.Ticks"/> holds the position it starts at.</summary>
+        Deferred,
     }
 
     /// <summary>
@@ -66,7 +72,7 @@ namespace Datamodel
         public string Name;
         public object? Reference;
         public InlineValue Inline;
-        public AttributeKind Kind;
+        public AttributeType Kind;
         public AttributeList.OverrideType? Override;
     }
 
@@ -78,7 +84,7 @@ namespace Datamodel
         /// <summary>Called once before the attributes, with how many follow.</summary>
         void Begin(int count);
 
-        void Visit(string name, AttributeKind kind, in InlineValue inline, object? reference);
+        void Visit(string name, AttributeType kind, in InlineValue inline, object? reference);
     }
 
     /// <summary>
@@ -228,24 +234,29 @@ namespace Datamodel
             slots![count] = default;
         }
 
-        static AttributeKind KindOf<T>() where T : unmanaged
+        /// <summary>Whether values of the type are stored in the slot itself rather than as a reference.</summary>
+        internal static bool IsInline(AttributeType type) => type is AttributeType.Int or AttributeType.Float or AttributeType.Bool or AttributeType.Byte or AttributeType.UInt64
+            or AttributeType.Time or AttributeType.Color or AttributeType.Vector2 or AttributeType.Vector3 or AttributeType.Vector4 or AttributeType.Quaternion or AttributeType.QAngle;
+
+        /// <summary>The type a slot stores values of <typeparamref name="T"/> as, or null when it is not one of the types stored inline.</summary>
+        static AttributeType? KindOf<T>() where T : unmanaged
         {
-            if (typeof(T) == typeof(int)) return AttributeKind.Int;
-            if (typeof(T) == typeof(float)) return AttributeKind.Float;
-            if (typeof(T) == typeof(bool)) return AttributeKind.Bool;
-            if (typeof(T) == typeof(byte)) return AttributeKind.Byte;
-            if (typeof(T) == typeof(ulong)) return AttributeKind.UInt64;
-            if (typeof(T) == typeof(TimeSpan)) return AttributeKind.Time;
-            if (typeof(T) == typeof(Color)) return AttributeKind.Color;
-            if (typeof(T) == typeof(Vector2)) return AttributeKind.Vector2;
-            if (typeof(T) == typeof(Vector3)) return AttributeKind.Vector3;
-            if (typeof(T) == typeof(Vector4)) return AttributeKind.Vector4;
-            if (typeof(T) == typeof(Quaternion)) return AttributeKind.Quaternion;
-            if (typeof(T) == typeof(QAngle)) return AttributeKind.QAngle;
-            return AttributeKind.Reference;
+            if (typeof(T) == typeof(int)) return AttributeType.Int;
+            if (typeof(T) == typeof(float)) return AttributeType.Float;
+            if (typeof(T) == typeof(bool)) return AttributeType.Bool;
+            if (typeof(T) == typeof(byte)) return AttributeType.Byte;
+            if (typeof(T) == typeof(ulong)) return AttributeType.UInt64;
+            if (typeof(T) == typeof(TimeSpan)) return AttributeType.Time;
+            if (typeof(T) == typeof(Color)) return AttributeType.Color;
+            if (typeof(T) == typeof(Vector2)) return AttributeType.Vector2;
+            if (typeof(T) == typeof(Vector3)) return AttributeType.Vector3;
+            if (typeof(T) == typeof(Vector4)) return AttributeType.Vector4;
+            if (typeof(T) == typeof(Quaternion)) return AttributeType.Quaternion;
+            if (typeof(T) == typeof(QAngle)) return AttributeType.QAngle;
+            return null;
         }
 
-        static void WriteInline<T>(ref AttributeSlot slot, AttributeKind kind, T value) where T : unmanaged
+        static void WriteInline<T>(ref AttributeSlot slot, AttributeType kind, T value) where T : unmanaged
         {
             slot.Kind = kind;
             slot.Reference = null;
@@ -261,44 +272,53 @@ namespace Datamodel
             switch (value)
             {
                 case null:
-                    slot.Kind = AttributeKind.Reference;
+                    slot.Kind = AttributeType.Element;
                     slot.Reference = null;
                     return;
-                case int v: WriteInline(ref slot, AttributeKind.Int, v); return;
-                case float v: WriteInline(ref slot, AttributeKind.Float, v); return;
-                case bool v: WriteInline(ref slot, AttributeKind.Bool, v); return;
-                case byte v: WriteInline(ref slot, AttributeKind.Byte, v); return;
-                case ulong v: WriteInline(ref slot, AttributeKind.UInt64, v); return;
-                case TimeSpan v: WriteInline(ref slot, AttributeKind.Time, v); return;
-                case Color v: WriteInline(ref slot, AttributeKind.Color, v); return;
-                case Vector2 v: WriteInline(ref slot, AttributeKind.Vector2, v); return;
-                case Vector3 v: WriteInline(ref slot, AttributeKind.Vector3, v); return;
-                case Vector4 v: WriteInline(ref slot, AttributeKind.Vector4, v); return;
-                case Quaternion v: WriteInline(ref slot, AttributeKind.Quaternion, v); return;
-                case QAngle v: WriteInline(ref slot, AttributeKind.QAngle, v); return;
+                case int v: WriteInline(ref slot, AttributeType.Int, v); return;
+                case float v: WriteInline(ref slot, AttributeType.Float, v); return;
+                case bool v: WriteInline(ref slot, AttributeType.Bool, v); return;
+                case byte v: WriteInline(ref slot, AttributeType.Byte, v); return;
+                case ulong v: WriteInline(ref slot, AttributeType.UInt64, v); return;
+                case TimeSpan v: WriteInline(ref slot, AttributeType.Time, v); return;
+                case Color v: WriteInline(ref slot, AttributeType.Color, v); return;
+                case Vector2 v: WriteInline(ref slot, AttributeType.Vector2, v); return;
+                case Vector3 v: WriteInline(ref slot, AttributeType.Vector3, v); return;
+                case Vector4 v: WriteInline(ref slot, AttributeType.Vector4, v); return;
+                case Quaternion v: WriteInline(ref slot, AttributeType.Quaternion, v); return;
+                case QAngle v: WriteInline(ref slot, AttributeType.QAngle, v); return;
                 case Element elem:
                     if (elem.Owner == null)
                         elem.Owner = Owner;
                     else if (elem.Owner != Owner)
                         throw new ElementOwnershipException();
+                    slot.Kind = AttributeType.Element;
                     break;
                 case ElementArray array:
                     if (array.Owner == null)
                         array.Owner = this;
                     else if (array.Owner != this)
                         throw new InvalidOperationException("ElementArray is already owned by a different Datamodel.");
+                    slot.Kind = AttributeType.Array;
                     break;
                 case IEnumerable<Element>:
                     throw new InvalidOperationException("Element array objects must derive from Datamodel.ElementArray");
-                case string or byte[] or Matrix4x4:
+                case string:
+                    slot.Kind = AttributeType.String;
+                    break;
+                case byte[]:
+                    slot.Kind = AttributeType.Binary;
+                    break;
+                case Matrix4x4:
+                    slot.Kind = AttributeType.Matrix;
                     break;
                 default:
                     if (!Datamodel.IsDatamodelType(value.GetType()))
                         throw new AttributeTypeException($"{value.GetType().FullName} is not a valid Datamodel attribute type. (If this is an array, it must implement IList<T>).");
+                    slot.Kind = AttributeType.Array;
                     break;
             }
 
-            slot.Kind = AttributeKind.Reference;
             slot.Reference = value;
         }
 
@@ -309,20 +329,20 @@ namespace Datamodel
         {
             return slot.Kind switch
             {
-                AttributeKind.Reference => slot.Reference,
-                AttributeKind.Deferred => null,
-                AttributeKind.Int => slot.Inline.Int,
-                AttributeKind.Float => slot.Inline.Float,
-                AttributeKind.Bool => slot.Inline.Bool,
-                AttributeKind.Byte => slot.Inline.Byte,
-                AttributeKind.UInt64 => slot.Inline.UInt64,
-                AttributeKind.Time => TimeSpan.FromTicks(slot.Inline.Ticks),
-                AttributeKind.Color => slot.Inline.Color,
-                AttributeKind.Vector2 => slot.Inline.Vector2,
-                AttributeKind.Vector3 => slot.Inline.Vector3,
-                AttributeKind.Vector4 => slot.Inline.Vector4,
-                AttributeKind.Quaternion => slot.Inline.Quaternion,
-                AttributeKind.QAngle => slot.Inline.QAngle,
+                AttributeType.Element or AttributeType.String or AttributeType.Binary or AttributeType.Matrix or AttributeType.Array => slot.Reference,
+                AttributeType.Deferred => null,
+                AttributeType.Int => slot.Inline.Int,
+                AttributeType.Float => slot.Inline.Float,
+                AttributeType.Bool => slot.Inline.Bool,
+                AttributeType.Byte => slot.Inline.Byte,
+                AttributeType.UInt64 => slot.Inline.UInt64,
+                AttributeType.Time => TimeSpan.FromTicks(slot.Inline.Ticks),
+                AttributeType.Color => slot.Inline.Color,
+                AttributeType.Vector2 => slot.Inline.Vector2,
+                AttributeType.Vector3 => slot.Inline.Vector3,
+                AttributeType.Vector4 => slot.Inline.Vector4,
+                AttributeType.Quaternion => slot.Inline.Quaternion,
+                AttributeType.QAngle => slot.Inline.QAngle,
                 _ => throw new InvalidOperationException("Unknown attribute kind."),
             };
         }
@@ -369,7 +389,7 @@ namespace Datamodel
             {
                 var index = Find(name);
                 ref var slot = ref (index < 0 ? ref Append(name) : ref slots![index]);
-                slot.Kind = AttributeKind.Deferred;
+                slot.Kind = AttributeType.Deferred;
                 slot.Reference = null;
                 slot.Override = null;
                 slot.Inline = default;
@@ -417,8 +437,7 @@ namespace Datamodel
                 return;
             }
 
-            var kind = KindOf<T>();
-            if (kind == AttributeKind.Reference)
+            if (KindOf<T>() is not AttributeType kind)
             {
                 this[name] = value;
                 return;
@@ -484,7 +503,7 @@ namespace Datamodel
                     case null:
                         break;
                     case OverrideType.Angle:
-                        if (slot.Kind != AttributeKind.Vector3)
+                        if (slot.Kind != AttributeType.Vector3)
                             throw new AttributeTypeException("OverrideType.Angle can only be applied to Vector3 attributes");
                         break;
                     case OverrideType.Binary:
@@ -815,11 +834,11 @@ namespace Datamodel
         /// </summary>
         void Resolve(int index)
         {
-            if (slots![index].Kind == AttributeKind.Deferred)
+            if (slots![index].Kind == AttributeType.Deferred)
                 LoadDeferred(index);
 
             ref var slot = ref slots[index];
-            if (slot.Kind == AttributeKind.Reference && slot.Reference is Element { Stub: true } stub && Owner != null)
+            if (slot.Kind == AttributeType.Element && slot.Reference is Element { Stub: true } stub && Owner != null)
             {
                 try { slot.Reference = Owner.OnStubRequest(stub.ID) ?? stub; }
                 catch (Exception err) { throw new DestubException(this, slot.Name, err); }
@@ -871,48 +890,53 @@ namespace Datamodel
         }
 
         /// <summary>
-        /// Splits a boxed value into the form a slot stores it in. Anything that is not a scalar or vector kind stays a reference, whether or not it is a valid attribute value.
+        /// Splits a boxed value into the form a slot stores it in. Anything that is not a scalar, vector, element, string, blob or matrix counts as an array, whether or not it is a valid attribute value.
         /// </summary>
-        internal static void Classify(object? value, out AttributeKind kind, out InlineValue inline, out object? reference)
+        internal static void Classify(object? value, out AttributeType kind, out InlineValue inline, out object? reference)
         {
             inline = default;
             reference = null;
             switch (value)
             {
-                case int v: kind = AttributeKind.Int; inline.Int = v; return;
-                case float v: kind = AttributeKind.Float; inline.Float = v; return;
-                case bool v: kind = AttributeKind.Bool; inline.Bool = v; return;
-                case byte v: kind = AttributeKind.Byte; inline.Byte = v; return;
-                case ulong v: kind = AttributeKind.UInt64; inline.UInt64 = v; return;
-                case TimeSpan v: kind = AttributeKind.Time; inline.Ticks = v.Ticks; return;
-                case Color v: kind = AttributeKind.Color; inline.Color = v; return;
-                case Vector2 v: kind = AttributeKind.Vector2; inline.Vector2 = v; return;
-                case Vector3 v: kind = AttributeKind.Vector3; inline.Vector3 = v; return;
-                case Vector4 v: kind = AttributeKind.Vector4; inline.Vector4 = v; return;
-                case Quaternion v: kind = AttributeKind.Quaternion; inline.Quaternion = v; return;
-                case QAngle v: kind = AttributeKind.QAngle; inline.QAngle = v; return;
-                default: kind = AttributeKind.Reference; reference = value; return;
+                case int v: kind = AttributeType.Int; inline.Int = v; return;
+                case float v: kind = AttributeType.Float; inline.Float = v; return;
+                case bool v: kind = AttributeType.Bool; inline.Bool = v; return;
+                case byte v: kind = AttributeType.Byte; inline.Byte = v; return;
+                case ulong v: kind = AttributeType.UInt64; inline.UInt64 = v; return;
+                case TimeSpan v: kind = AttributeType.Time; inline.Ticks = v.Ticks; return;
+                case Color v: kind = AttributeType.Color; inline.Color = v; return;
+                case Vector2 v: kind = AttributeType.Vector2; inline.Vector2 = v; return;
+                case Vector3 v: kind = AttributeType.Vector3; inline.Vector3 = v; return;
+                case Vector4 v: kind = AttributeType.Vector4; inline.Vector4 = v; return;
+                case Quaternion v: kind = AttributeType.Quaternion; inline.Quaternion = v; return;
+                case QAngle v: kind = AttributeType.QAngle; inline.QAngle = v; return;
+                case null: kind = AttributeType.Element; return;
+                case Element: kind = AttributeType.Element; reference = value; return;
+                case string: kind = AttributeType.String; reference = value; return;
+                case byte[]: kind = AttributeType.Binary; reference = value; return;
+                case Matrix4x4: kind = AttributeType.Matrix; reference = value; return;
+                default: kind = AttributeType.Array; reference = value; return;
             }
         }
 
         /// <summary>
         /// The kind a slot stores values of the given type as: inline for the scalar and vector types, a reference for everything else.
         /// </summary>
-        internal static AttributeKind KindOf(Type type)
+        internal static AttributeType? KindOf(Type type)
         {
-            if (type == typeof(int)) return AttributeKind.Int;
-            if (type == typeof(float)) return AttributeKind.Float;
-            if (type == typeof(bool)) return AttributeKind.Bool;
-            if (type == typeof(byte)) return AttributeKind.Byte;
-            if (type == typeof(ulong)) return AttributeKind.UInt64;
-            if (type == typeof(TimeSpan)) return AttributeKind.Time;
-            if (type == typeof(Color)) return AttributeKind.Color;
-            if (type == typeof(Vector2)) return AttributeKind.Vector2;
-            if (type == typeof(Vector3)) return AttributeKind.Vector3;
-            if (type == typeof(Vector4)) return AttributeKind.Vector4;
-            if (type == typeof(Quaternion)) return AttributeKind.Quaternion;
-            if (type == typeof(QAngle)) return AttributeKind.QAngle;
-            return AttributeKind.Reference;
+            if (type == typeof(int)) return AttributeType.Int;
+            if (type == typeof(float)) return AttributeType.Float;
+            if (type == typeof(bool)) return AttributeType.Bool;
+            if (type == typeof(byte)) return AttributeType.Byte;
+            if (type == typeof(ulong)) return AttributeType.UInt64;
+            if (type == typeof(TimeSpan)) return AttributeType.Time;
+            if (type == typeof(Color)) return AttributeType.Color;
+            if (type == typeof(Vector2)) return AttributeType.Vector2;
+            if (type == typeof(Vector3)) return AttributeType.Vector3;
+            if (type == typeof(Vector4)) return AttributeType.Vector4;
+            if (type == typeof(Quaternion)) return AttributeType.Quaternion;
+            if (type == typeof(QAngle)) return AttributeType.QAngle;
+            return null;
         }
 
         #region Interfaces
