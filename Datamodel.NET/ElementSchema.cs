@@ -11,9 +11,9 @@ namespace Datamodel
     /// Instances are emitted by the ElementFactory that the KeyValues2.ElementFactoryGenerator generates into the assembly declaring the class,
     /// so no reflection is needed to move values between properties and attributes.
     /// </remarks>
-    public sealed class PropertyBinding
+    public class PropertyBinding
     {
-        readonly Func<AttributeList, object?> getter;
+        readonly Func<AttributeList, object?>? getter;
         readonly Action<AttributeList, object?>? setter;
 
         /// <param name="propertyName">The name of the property in the class.</param>
@@ -22,21 +22,28 @@ namespace Datamodel
         /// <param name="getter">Reads the property of the given element.</param>
         /// <param name="setter">Writes the property of the given element, or null when the property has no setter.</param>
         public PropertyBinding(string propertyName, string attributeName, Type propertyType, Func<AttributeList, object?> getter, Action<AttributeList, object?>? setter)
+            : this(propertyName, attributeName, propertyType, setter != null)
         {
-            ArgumentNullException.ThrowIfNull(propertyName);
-            ArgumentNullException.ThrowIfNull(attributeName);
-            ArgumentNullException.ThrowIfNull(propertyType);
             ArgumentNullException.ThrowIfNull(getter);
 
-            PropertyName = propertyName;
-            AttributeName = attributeName;
-            PropertyType = propertyType;
             this.getter = getter;
             this.setter = setter;
         }
 
+        private protected PropertyBinding(string propertyName, string attributeName, Type propertyType, bool canWrite)
+        {
+            ArgumentNullException.ThrowIfNull(propertyName);
+            ArgumentNullException.ThrowIfNull(attributeName);
+            ArgumentNullException.ThrowIfNull(propertyType);
+
+            PropertyName = propertyName;
+            AttributeName = attributeName;
+            PropertyType = propertyType;
+            CanWrite = canWrite;
+        }
+
         /// <summary>
-        /// Creates a binding from typed accessors, so that generated code needs no casts.
+        /// Creates a binding from typed accessors, so that generated code needs no casts and values move without boxing.
         /// </summary>
         /// <typeparam name="TElement">The class declaring the property.</typeparam>
         /// <typeparam name="TValue">The type of the property.</typeparam>
@@ -44,17 +51,12 @@ namespace Datamodel
         /// <param name="attributeName">The name of the attribute in the file.</param>
         /// <param name="getter">Reads the property.</param>
         /// <param name="setter">Writes the property, or null when it has no setter.</param>
-        public static PropertyBinding Create<TElement, TValue>(string propertyName, string attributeName, Func<TElement, TValue> getter, Action<TElement, TValue>? setter)
+        public static PropertyBinding<TValue> Create<TElement, TValue>(string propertyName, string attributeName, Func<TElement, TValue> getter, Action<TElement, TValue>? setter)
             where TElement : AttributeList
         {
             ArgumentNullException.ThrowIfNull(getter);
 
-            return new PropertyBinding(
-                propertyName,
-                attributeName,
-                typeof(TValue),
-                element => getter((TElement)element),
-                setter == null ? null : (element, value) => setter((TElement)element, (TValue)value!));
+            return new PropertyBinding<TElement, TValue>(propertyName, attributeName, getter, setter);
         }
 
         /// <summary>
@@ -75,18 +77,18 @@ namespace Datamodel
         /// <summary>
         /// Gets whether the property can be assigned.
         /// </summary>
-        public bool CanWrite => setter != null;
+        public bool CanWrite { get; }
 
         /// <summary>
         /// Reads the property of the given element.
         /// </summary>
-        public object? GetValue(AttributeList owner) => getter(owner);
+        public virtual object? GetValue(AttributeList owner) => getter!(owner);
 
         /// <summary>
         /// Writes the property of the given element.
         /// </summary>
         /// <exception cref="InvalidOperationException">Thrown when the property has no setter.</exception>
-        public void SetValue(AttributeList owner, object? value)
+        public virtual void SetValue(AttributeList owner, object? value)
         {
             if (setter == null)
             {
@@ -97,6 +99,62 @@ namespace Datamodel
         }
 
         public override string ToString() => $"{PropertyName} <{PropertyType.Name}> as \"{AttributeName}\"";
+    }
+
+    /// <summary>
+    /// A <see cref="PropertyBinding"/> whose value type is known, so that codecs and the attribute indexer move values without boxing them.
+    /// </summary>
+    /// <typeparam name="TValue">The type of the property.</typeparam>
+    public abstract class PropertyBinding<TValue> : PropertyBinding
+    {
+        private protected PropertyBinding(string propertyName, string attributeName, bool canWrite)
+            : base(propertyName, attributeName, typeof(TValue), canWrite)
+        {
+        }
+
+        /// <summary>
+        /// Reads the property of the given element.
+        /// </summary>
+        public abstract TValue Get(AttributeList owner);
+
+        /// <summary>
+        /// Writes the property of the given element.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">Thrown when the property has no setter.</exception>
+        public abstract void Set(AttributeList owner, TValue value);
+
+        public override object? GetValue(AttributeList owner) => Get(owner);
+
+        public override void SetValue(AttributeList owner, object? value) => Set(owner, (TValue)value!);
+    }
+
+    /// <summary>
+    /// The binding <see cref="PropertyBinding.Create{TElement, TValue}"/> makes: the generated accessors of one property, called without any cast of the value.
+    /// </summary>
+    sealed class PropertyBinding<TElement, TValue> : PropertyBinding<TValue>
+        where TElement : AttributeList
+    {
+        readonly Func<TElement, TValue> getter;
+        readonly Action<TElement, TValue>? setter;
+
+        public PropertyBinding(string propertyName, string attributeName, Func<TElement, TValue> getter, Action<TElement, TValue>? setter)
+            : base(propertyName, attributeName, setter != null)
+        {
+            this.getter = getter;
+            this.setter = setter;
+        }
+
+        public override TValue Get(AttributeList owner) => getter((TElement)owner);
+
+        public override void Set(AttributeList owner, TValue value)
+        {
+            if (setter == null)
+            {
+                throw new InvalidOperationException($"Property '{PropertyName}' is read-only.");
+            }
+
+            setter((TElement)owner, value);
+        }
     }
 
     /// <summary>

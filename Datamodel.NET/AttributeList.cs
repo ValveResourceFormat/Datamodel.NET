@@ -394,8 +394,18 @@ namespace Datamodel
         {
             ArgumentNullException.ThrowIfNull(name);
 
+            if (Schema.Properties.Count > 0 && Schema.GetProperty(name) is PropertyBinding binding)
+            {
+                // the generated binding of a class property takes the value as it is, so nothing is boxed on the way in
+                if (binding.CanWrite && binding is PropertyBinding<T> typed)
+                    typed.Set(this, value);
+                else
+                    SetProperty(binding, name, value);
+                return;
+            }
+
             var kind = KindOf<T>();
-            if (kind == AttributeKind.Reference || (Schema.Properties.Count > 0 && Schema.GetProperty(name) != null))
+            if (kind == AttributeKind.Reference)
             {
                 this[name] = value;
                 return;
