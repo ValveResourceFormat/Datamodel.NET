@@ -11,6 +11,7 @@ using System.Numerics;
 using DM = Datamodel.Datamodel;
 using System.Globalization;
 using Tests.VMAP;
+using ValveResourceFormat.IO;
 
 namespace Datamodel_Tests
 {
@@ -33,10 +34,11 @@ namespace Datamodel_Tests
         protected FileStream Binary_4_File = File.OpenRead(TestContext.TestDirectory + "/Resources/binary4.dmx");
         protected FileStream KeyValues2_1_File = File.OpenRead(TestContext.TestDirectory + "/Resources/taunt05.dmx");
 
-        const string GameBin = @"D:/Steam/steamapps/common/Counter-Strike Global Offensive/game/bin/win64";
-
-        static readonly string DmxConvertExe = Path.Combine(GameBin, "dmxconvert.exe");
-        static readonly bool DmxConvertExe_Exists = File.Exists(DmxConvertExe);
+        /// <summary>dmxconvert.exe of any installed Source 2 game, used to validate what the library writes. Null when no game is installed.</summary>
+        static readonly string? DmxConvertExe = GameFolderLocator.FindAllSteamGames()
+            .Select(game => Path.Combine(game.GamePath, "game", "bin", "win64", "dmxconvert.exe"))
+            .FirstOrDefault(File.Exists);
+        static readonly bool DmxConvertExe_Exists = DmxConvertExe != null;
 
         static DatamodelTests()
         {
