@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -6,6 +7,7 @@ using System.Numerics;
 using System.IO;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Datamodel.Codecs
@@ -150,87 +152,34 @@ namespace Datamodel.Codecs
                     var count = LengthSize == sizeof(short) ? reader.ReadInt16() : reader.ReadInt32();
                     Strings.Capacity = count;
                     for (var i = 0; i < count; i++)
-                        AddString(Codec.ReadString_Raw(reader));
+                        Strings.Add(Codec.ReadString_Raw(reader));
                 }
             }
 
             /// <summary>
-            /// Constructs a new <see cref="StringDictionary"/> from a <see cref="Datamodel"/> object.
+            /// Constructs an empty dictionary for writing. The encoder adds every string it meets, in the order it meets them.
             /// </summary>
-            public StringDictionary(int encoding_version, BinaryWriter writer, Datamodel dm, SerializationContext context)
+            public StringDictionary(int encoding_version)
             {
                 EncodingVersion = encoding_version;
-                Context = context;
-
                 Dummy = EncodingVersion == 1;
                 if (!Dummy)
-                {
                     Indices = [];
-                    Scraped = [];
-
-                    ScrapeElement(dm.Root);
-
-                    // the prefix attributes are also written as a regular element in version 9
-                    if (EncodingVersion >= 9 && dm.PrefixAttributes.Count > 0)
-                    {
-                        AddString(string.Empty);
-                        AddString(PrefixElementClass);
-                        foreach (var attr in dm.PrefixAttributes)
-                        {
-                            AddString(attr.Key);
-                            if (attr.Value is string stringValue)
-                                AddString(stringValue);
-                        }
-                    }
-                }
-            }
-
-            private readonly HashSet<Element> Scraped = [];
-            private readonly SerializationContext? Context;
-
-            void ScrapeElement(Element? elem)
-            {
-                if (elem == null || elem.Stub || Scraped.Contains(elem)) return;
-                Scraped.Add(elem);
-
-                AddString(elem.Name);
-                AddString(elem.ClassName);
-                foreach (var attr in Context!.Attributes[elem])
-                {
-                    AddString(attr.Key);
-                    switch (attr.Value)
-                    {
-                        case string stringValue:
-                            AddString(stringValue);
-                            break;
-                        case Element elementValue:
-                            ScrapeElement(elementValue);
-                            break;
-                        case IList<Element> elementListValue:
-                            foreach (var array_elem in elementListValue)
-                                ScrapeElement(array_elem);
-                            break;
-                    }
-                }
             }
 
             /// <summary>
-            /// Add non-nullable string.
+            /// Adds a string to the table unless it is there already. Nothing is added for a version that writes every string in place.
             /// </summary>
-            /// <param name="value"></param>
-            void AddString(string value)
+            public void AddString(string? value)
             {
-                value ??= string.Empty;
-
                 if (Indices == null)
-                {
-                    Strings.Add(value);
                     return;
-                }
 
+                value ??= string.Empty;
                 if (Indices.TryAdd(value, Strings.Count))
                     Strings.Add(value);
             }
+
 
             int GetIndex(string value)
             {
@@ -661,28 +610,36 @@ namespace Datamodel.Codecs
             reader.BaseStream.Seek(length * count, SeekOrigin.Current);
         }
 
-        readonly struct Encoder
+        /// <summary>
+        /// Writes a datamodel the way Valve's CDmSerializerBinary does: one pass from the root gathers the strings and fixes the order of the elements,
+        /// a second pass writes the bodies. Attributes are read in the form their slots hold them, so no value is boxed, and an array of plain values is written in one piece.
+        /// </summary>
+        sealed class Encoder
         {
-            readonly Dictionary<Element, int> ElementIndices;
-            readonly List<AttributeList> ElementOrder;
             readonly BinaryWriter Writer;
             readonly StringDictionary StringDict;
             readonly Datamodel Datamodel;
-            readonly SerializationContext Context;
-
             readonly int EncodingVersion;
+
+            /// <summary>The bodies in the order their index entries are written: the root, the prefix attributes when the version stores them as an element, then every element in the order it is first reached.</summary>
+            readonly List<AttributeList> Order = [];
+            readonly Dictionary<Element, int> Indices = [];
+
+            /// <summary>Type ids of the inline kinds, filled in as they are met, since a version may not support every kind.</summary>
+            readonly byte[] KindIds = new byte[16];
+            readonly Dictionary<Type, byte> ArrayIds = [];
+            readonly byte ElementId, StringId, BinaryId, MatrixId;
 
             public Encoder(BinaryWriter writer, Datamodel dm, int version)
             {
                 EncodingVersion = version;
                 Writer = writer;
                 Datamodel = dm;
-
-                Context = new SerializationContext();
-                StringDict = new StringDictionary(version, writer, dm, Context);
-                ElementIndices = [];
-                ElementOrder = [];
-
+                StringDict = new StringDictionary(version);
+                ElementId = TypeToId(typeof(Element), version);
+                StringId = TypeToId(typeof(string), version);
+                BinaryId = TypeToId(typeof(byte[]), version);
+                MatrixId = TypeToId(typeof(Matrix4x4), version);
             }
 
             public void Encode()
@@ -694,107 +651,105 @@ namespace Datamodel.Codecs
                     WritePrefixAttributes();
                 }
 
-                StringDict.WriteSelf(Writer);
-
                 var hasPrefixElement = EncodingVersion >= 9 && Datamodel.PrefixAttributes.Count > 0;
-                var elementCount = CountChildren(Datamodel.Root, []) + (hasPrefixElement ? 1 : 0);
-                Writer.Write(elementCount);
-
                 var root = Datamodel.Root;
                 if (root != null && !root.Stub)
                 {
-                    WriteIndexEntry(root, root.ClassName, root.Name, root.ID);
+                    Indices[root] = 0;
+                    Order.Add(root);
 
                     // the prefix attributes are also stored as an unreferenced element right after the root
                     if (hasPrefixElement)
-                        WriteIndexEntry(Datamodel.PrefixAttributes, PrefixElementClass, string.Empty, Datamodel.PrefixElementId);
+                        Order.Add(Datamodel.PrefixAttributes);
 
-                    WriteIndexChildren(root);
-                }
+                    Gather(root);
 
-                foreach (var body in ElementOrder)
-                    WriteBody(body);
-            }
-
-            int CountChildren(Element? elem, HashSet<Element> counter)
-            {
-                if (elem is null)
-                {
-                    return 0;
-                }
-
-                if (elem.Stub) return 0;
-                int num_elems = 1;
-                counter.Add(elem);
-                foreach (var attr in Context.Attributes[elem])
-                {
-                    if (attr.Value == null) continue;
-
-                    if (attr.Value is Element child_elem && !counter.Contains(child_elem))
+                    if (hasPrefixElement)
                     {
-                        num_elems += CountChildren(child_elem, counter);
-                    }
-                    else if (attr.Value is IEnumerable<Element> child_array)
-                    {
-                        foreach (var array_elem in child_array.Where(c => c != null && !counter.Contains(c)))
-                            num_elems += CountChildren(array_elem, counter);
-                    }
-                }
-
-                return num_elems;
-            }
-
-            void WriteIndex(Element? elem)
-            {
-                if (elem is null || elem.Stub || ElementIndices.ContainsKey(elem)) return;
-
-                WriteIndexEntry(elem, elem.ClassName, elem.Name, elem.ID);
-                WriteIndexChildren(elem);
-            }
-
-            void WriteIndexEntry(AttributeList body, string className, string name, Guid id)
-            {
-                if (body is Element elem)
-                    ElementIndices[elem] = ElementOrder.Count;
-                ElementOrder.Add(body);
-
-                StringDict.WriteString(className, Writer);
-                if (EncodingVersion >= 4) StringDict.WriteString(name, Writer);
-                else Writer.Write(name);
-                Writer.Write(id.ToByteArray());
-            }
-
-            void WriteIndexChildren(Element elem)
-            {
-                foreach (var attr in Context.Attributes[elem])
-                {
-                    var child_elem = attr.Value as Element;
-                    if (child_elem != null)
-                    {
-                        if (!ElementIndices.ContainsKey(child_elem))
-                            WriteIndex(child_elem);
-                    }
-                    else
-                    {
-                        var elem_list = attr.Value as IList<Element>;
-                        if (elem_list != null)
+                        StringDict.AddString(string.Empty);
+                        StringDict.AddString(PrefixElementClass);
+                        foreach (var attr in Datamodel.PrefixAttributes)
                         {
-                            var elem_indices = ElementIndices; // workaround for .Net 4 lambda limitation in structs
-                            foreach (var item in elem_list.Where(e => e != null && !elem_indices.ContainsKey(e)))
-                                WriteIndex(item);
+                            StringDict.AddString(attr.Key);
+                            if (attr.Value is string stringValue)
+                                StringDict.AddString(stringValue);
                         }
                     }
                 }
+
+                StringDict.WriteSelf(Writer);
+                Writer.Write(Order.Count);
+
+                Span<byte> id = stackalloc byte[16];
+                foreach (var body in Order)
+                {
+                    var (className, name, elementId) = body is Element elem ? (elem.ClassName, elem.Name, elem.ID) : (PrefixElementClass, string.Empty, Datamodel.PrefixElementId);
+                    StringDict.WriteString(className, Writer);
+                    if (EncodingVersion >= 4) StringDict.WriteString(name, Writer);
+                    else Writer.Write(name);
+                    elementId.TryWriteBytes(id);
+                    Writer.Write(id);
+                }
+
+                foreach (var body in Order)
+                    WriteBody(body);
             }
 
             /// <summary>
-            /// Prefix attributes are stored as a list of prefix elements, each a list of name/typed value pairs.
-            /// Only the first prefix element is read back, so everything is written into a single one.
+            /// Adds the strings of an element to the table and reaches the elements it refers to, depth first in attribute order, which is the order of the index.
             /// </summary>
+            void Gather(Element elem)
+            {
+                StringDict.AddString(elem.Name);
+                StringDict.AddString(elem.ClassName);
+
+                var visitor = new GatherVisitor(this);
+                elem.VisitAttributes(ref visitor);
+            }
+
+            void Reach(Element? child)
+            {
+                if (child == null || child.Stub || Indices.ContainsKey(child))
+                    return;
+
+                Indices[child] = Order.Count;
+                Order.Add(child);
+                Gather(child);
+            }
+
+            readonly struct GatherVisitor(Encoder encoder) : IAttributeVisitor
+            {
+                public void Begin(int count)
+                {
+                }
+
+                public void Visit(string name, AttributeKind kind, in InlineValue inline, object? reference)
+                {
+                    encoder.StringDict.AddString(name);
+
+                    switch (reference)
+                    {
+                        case string stringValue:
+                            encoder.StringDict.AddString(stringValue);
+                            break;
+                        case Element child:
+                            encoder.Reach(child);
+                            break;
+                        case ElementArray children:
+                            foreach (var child in children.AsSpan())
+                                encoder.Reach(child);
+                            break;
+                        case IList<Element> children:
+                            foreach (var child in children)
+                                encoder.Reach(child);
+                            break;
+                    }
+                }
+            }
+
             void WritePrefixAttributes()
             {
                 var prefixAttributes = Datamodel.PrefixAttributes.Where(attr => attr.Value != null).ToArray();
-
                 if (prefixAttributes.Length == 0)
                 {
                     Writer.Write(0);
@@ -803,184 +758,297 @@ namespace Datamodel.Codecs
 
                 Writer.Write(1);
                 Writer.Write(prefixAttributes.Length);
-
                 foreach (var attr in prefixAttributes)
                 {
                     Writer.Write(attr.Key);
-                    WriteTypedValue(attr.Value, raw_string: true);
+                    AttributeList.Classify(attr.Value, out var kind, out var inline, out var reference);
+                    WriteValue(kind, in inline, reference, rawStrings: true);
                 }
             }
 
-            void WriteBody(AttributeList elem)
+            void WriteBody(AttributeList body)
             {
-                var attributesIterated = elem is Element element ? Context.Attributes[element] : elem.GetAllAttributesForSerialization().ToArray();
-                Writer.Write(attributesIterated.Length);
-                foreach (var attr in attributesIterated)
+                var visitor = new WriteVisitor(this);
+                body.VisitAttributes(ref visitor);
+            }
+
+            readonly struct WriteVisitor(Encoder encoder) : IAttributeVisitor
+            {
+                public void Begin(int count)
                 {
-                    StringDict.WriteString(attr.Key, Writer);
-                    WriteTypedValue(attr.Value, raw_string: false);
+                    encoder.Writer.Write(count);
+                }
+
+                public void Visit(string name, AttributeKind kind, in InlineValue inline, object? reference)
+                {
+                    encoder.StringDict.WriteString(name, encoder.Writer);
+                    encoder.WriteValue(kind, in inline, reference, rawStrings: false);
                 }
             }
 
             /// <summary>
-            /// Writes the type id of a value followed by the value itself, or by the item count and items for arrays.
+            /// Writes the type id of a value and the value itself.
             /// </summary>
-            void WriteTypedValue(object? value, bool raw_string)
+            /// <param name="rawStrings">Whether a string is written in place rather than as an index into the table, as the prefix attributes and array items are.</param>
+            void WriteValue(AttributeKind kind, in InlineValue inline, object? reference, bool rawStrings)
             {
-                var attr_type = value == null ? typeof(Element) : value.GetType();
-                var attr_type_id = TypeToId(attr_type, EncodingVersion);
-                Writer.Write(attr_type_id);
-
-                if (value == null || value is byte[] || !Datamodel.IsDatamodelArrayType(attr_type))
+                if (kind != AttributeKind.Reference)
                 {
-                    WriteAttribute(value, raw_string);
+                    Writer.Write(IdOf(kind));
+                    WriteInline(kind, in inline);
                     return;
                 }
 
-                var array = (System.Collections.IList)value;
+                switch (reference)
+                {
+                    case null:
+                        Writer.Write(ElementId);
+                        Writer.Write(-1);
+                        return;
+                    case Element elem:
+                        Writer.Write(ElementId);
+                        WriteElement(elem);
+                        return;
+                    case string stringValue:
+                        Writer.Write(StringId);
+                        WriteString(stringValue, rawStrings);
+                        return;
+                    case byte[] binary:
+                        Writer.Write(BinaryId);
+                        Writer.Write(binary.Length);
+                        Writer.Write(binary);
+                        return;
+                    case Matrix4x4 matrix:
+                        Writer.Write(MatrixId);
+                        WriteMatrix(in matrix);
+                        return;
+                    case IList array:
+                        WriteArray(array);
+                        return;
+                    default:
+                        throw new InvalidOperationException("Unrecognised output Type.");
+                }
+            }
+
+            /// <summary>
+            /// Writes an array with its type id. The items of an array whose memory layout matches the stream are written in one piece.
+            /// </summary>
+            void WriteArray(IList array)
+            {
+                Writer.Write(IdOf(array.GetType()));
                 Writer.Write(array.Count);
+
+                switch (array)
+                {
+                    case ElementArray elements:
+                        foreach (var elem in elements.AsSpan())
+                        {
+                            if (elem == null)
+                                Writer.Write(-1);
+                            else
+                                WriteElement(elem);
+                        }
+                        return;
+                    case StringArray strings:
+                        foreach (var stringValue in strings.AsSpan())
+                            Writer.Write(stringValue);
+                        return;
+                    case BinaryArray binaries:
+                        foreach (var binary in binaries.AsSpan())
+                        {
+                            if (binary == null)
+                            {
+                                Writer.Write(-1);
+                                continue;
+                            }
+
+                            Writer.Write(binary.Length);
+                            Writer.Write(binary);
+                        }
+                        return;
+                    case TimeSpanArray times:
+                        foreach (var time in times.AsSpan())
+                            Writer.Write(ToTicks(time));
+                        return;
+                    case IntArray a: WriteItems(a.AsSpan()); return;
+                    case FloatArray a: WriteItems(a.AsSpan()); return;
+                    case BoolArray a: WriteItems(a.AsSpan()); return;
+                    case ColorArray a: WriteItems(a.AsSpan()); return;
+                    case Vector2Array a: WriteItems(a.AsSpan()); return;
+                    case Vector3Array a: WriteItems(a.AsSpan()); return;
+                    case Vector4Array a: WriteItems(a.AsSpan()); return;
+                    case QuaternionArray a: WriteItems(a.AsSpan()); return;
+                    case MatrixArray a: WriteItems(a.AsSpan()); return;
+                    case ByteArray a: WriteItems(a.AsSpan()); return;
+                    case UInt64Array a: WriteItems(a.AsSpan()); return;
+                }
+
                 foreach (var item in array)
-                    WriteAttribute(item, true);
-            }
-
-            /// <param name="in_array">Whether the value is an array item or a prefix attribute, in which case strings are written inline rather than through the dictionary.</param>
-            void WriteAttribute(object? value, bool in_array)
-            {
-                if (value == null)
                 {
-                    Writer.Write(-1);
-                    return;
-                }
-
-                if (value is Element child_elem)
-                {
-                    if (child_elem.Stub)
+                    AttributeList.Classify(item, out var kind, out var inline, out var reference);
+                    if (kind != AttributeKind.Reference)
+                        WriteInline(kind, in inline);
+                    else if (reference == null)
+                        Writer.Write(-1);
+                    else if (reference is Element elem)
+                        WriteElement(elem);
+                    else if (reference is string stringValue)
+                        Writer.Write(stringValue);
+                    else if (reference is byte[] binary)
                     {
-                        Writer.Write(-2);
-                        Writer.Write(child_elem.ID.ToString().ToArray()); // yes, ToString()!
-                        Writer.Write((byte)0);
+                        Writer.Write(binary.Length);
+                        Writer.Write(binary);
                     }
+                    else if (reference is Matrix4x4 matrix)
+                        WriteMatrix(in matrix);
                     else
-                        Writer.Write(ElementIndices[child_elem]);
-                    return;
+                        throw new InvalidOperationException("Unrecognised output Type.");
                 }
-
-                if (value is string string_value)
-                {
-                    if (EncodingVersion < 4 || in_array)
-                        Writer.Write(string_value);
-                    else
-                        StringDict.WriteString(string_value, Writer);
-                    return;
-                }
-
-                if (value is bool bool_value)
-                {
-                    Writer.Write(bool_value == true ? (byte)1 : (byte)0);
-                    return;
-                }
-
-                if (value is byte[] binary_value)
-                {
-                    Writer.Write(binary_value.Length);
-                    Writer.Write(binary_value);
-                    return;
-                }
-
-                if (value is TimeSpan time_span)
-                {
-                    Writer.Write((int)(time_span.Ticks / (TimeSpan.TicksPerSecond / DatamodelTicksPerSecond)));
-                    return;
-                }
-
-                if (value is Color colour_value)
-                {
-                    Writer.Write(colour_value.ToBytes());
-                    return;
-                }
-
-                if (value is Vector2 vector2)
-                {
-                    Writer.Write(vector2.X);
-                    Writer.Write(vector2.Y);
-                    return;
-                }
-                if (value is Vector3 vector3)
-                {
-                    Writer.Write(vector3.X);
-                    Writer.Write(vector3.Y);
-                    Writer.Write(vector3.Z);
-                    return;
-                }
-                if (value is QAngle qangle)
-                {
-                    Writer.Write(qangle.Pitch);
-                    Writer.Write(qangle.Yaw);
-                    Writer.Write(qangle.Roll);
-                    return;
-                }
-                if (value is Vector4 vector4)
-                {
-                    Writer.Write(vector4.X);
-                    Writer.Write(vector4.Y);
-                    Writer.Write(vector4.Z);
-                    Writer.Write(vector4.W);
-                    return;
-                }
-                if (value is Quaternion quaternion)
-                {
-                    Writer.Write(quaternion.X);
-                    Writer.Write(quaternion.Y);
-                    Writer.Write(quaternion.Z);
-                    Writer.Write(quaternion.W);
-                    return;
-                }
-                if (value is Matrix4x4 matrix)
-                {
-                    Writer.Write(matrix.M11);
-                    Writer.Write(matrix.M12);
-                    Writer.Write(matrix.M13);
-                    Writer.Write(matrix.M14);
-                    Writer.Write(matrix.M21);
-                    Writer.Write(matrix.M22);
-                    Writer.Write(matrix.M23);
-                    Writer.Write(matrix.M24);
-                    Writer.Write(matrix.M31);
-                    Writer.Write(matrix.M32);
-                    Writer.Write(matrix.M33);
-                    Writer.Write(matrix.M34);
-                    Writer.Write(matrix.M41);
-                    Writer.Write(matrix.M42);
-                    Writer.Write(matrix.M43);
-                    Writer.Write(matrix.M44);
-                    return;
-                }
-
-                if (value is int intValue)
-                {
-                    Writer.Write(intValue);
-                    return;
-                }
-                if (value is float floatValue)
-                {
-                    Writer.Write(floatValue);
-                    return;
-                }
-
-                if (value is byte byteValue)
-                {
-                    Writer.Write(byteValue);
-                    return;
-                }
-
-                if (value is ulong ulongValue)
-                {
-                    Writer.Write(ulongValue);
-                    return;
-                }
-
-                throw new InvalidOperationException("Unrecognised output Type.");
             }
+
+            /// <summary>
+            /// Writes items whose layout in memory is their layout in the stream: the scalars, the vectors and the four by four matrix, all little-endian floats and integers.
+            /// </summary>
+            void WriteItems<T>(ReadOnlySpan<T> items) where T : unmanaged
+            {
+                if (BitConverter.IsLittleEndian)
+                {
+                    Writer.Write(MemoryMarshal.AsBytes(items));
+                    return;
+                }
+
+                foreach (var item in items)
+                {
+                    AttributeList.Classify(item, out var kind, out var inline, out var reference);
+                    if (kind != AttributeKind.Reference)
+                        WriteInline(kind, in inline);
+                    else
+                        WriteMatrix((Matrix4x4)reference!);
+                }
+            }
+
+            void WriteInline(AttributeKind kind, in InlineValue inline)
+            {
+                switch (kind)
+                {
+                    case AttributeKind.Int: Writer.Write(inline.Int); return;
+                    case AttributeKind.Float: Writer.Write(inline.Float); return;
+                    case AttributeKind.Bool: Writer.Write(inline.Bool ? (byte)1 : (byte)0); return;
+                    case AttributeKind.Byte: Writer.Write(inline.Byte); return;
+                    case AttributeKind.UInt64: Writer.Write(inline.UInt64); return;
+                    case AttributeKind.Time: Writer.Write(ToTicks(TimeSpan.FromTicks(inline.Ticks))); return;
+                    case AttributeKind.Color:
+                        Writer.Write(inline.Color.R);
+                        Writer.Write(inline.Color.G);
+                        Writer.Write(inline.Color.B);
+                        Writer.Write(inline.Color.A);
+                        return;
+                    case AttributeKind.Vector2:
+                        Writer.Write(inline.Vector2.X);
+                        Writer.Write(inline.Vector2.Y);
+                        return;
+                    case AttributeKind.Vector3:
+                        Writer.Write(inline.Vector3.X);
+                        Writer.Write(inline.Vector3.Y);
+                        Writer.Write(inline.Vector3.Z);
+                        return;
+                    case AttributeKind.QAngle:
+                        Writer.Write(inline.QAngle.Pitch);
+                        Writer.Write(inline.QAngle.Yaw);
+                        Writer.Write(inline.QAngle.Roll);
+                        return;
+                    case AttributeKind.Vector4:
+                        Writer.Write(inline.Vector4.X);
+                        Writer.Write(inline.Vector4.Y);
+                        Writer.Write(inline.Vector4.Z);
+                        Writer.Write(inline.Vector4.W);
+                        return;
+                    case AttributeKind.Quaternion:
+                        Writer.Write(inline.Quaternion.X);
+                        Writer.Write(inline.Quaternion.Y);
+                        Writer.Write(inline.Quaternion.Z);
+                        Writer.Write(inline.Quaternion.W);
+                        return;
+                    default:
+                        throw new InvalidOperationException("Unrecognised output Type.");
+                }
+            }
+
+            void WriteMatrix(in Matrix4x4 matrix)
+            {
+                Writer.Write(matrix.M11);
+                Writer.Write(matrix.M12);
+                Writer.Write(matrix.M13);
+                Writer.Write(matrix.M14);
+                Writer.Write(matrix.M21);
+                Writer.Write(matrix.M22);
+                Writer.Write(matrix.M23);
+                Writer.Write(matrix.M24);
+                Writer.Write(matrix.M31);
+                Writer.Write(matrix.M32);
+                Writer.Write(matrix.M33);
+                Writer.Write(matrix.M34);
+                Writer.Write(matrix.M41);
+                Writer.Write(matrix.M42);
+                Writer.Write(matrix.M43);
+                Writer.Write(matrix.M44);
+            }
+
+            void WriteElement(Element elem)
+            {
+                if (elem.Stub)
+                {
+                    Writer.Write(-2);
+                    Writer.Write(elem.ID.ToString().ToCharArray()); // yes, ToString()!
+                    Writer.Write((byte)0);
+                }
+                else
+                {
+                    Writer.Write(Indices[elem]);
+                }
+            }
+
+            void WriteString(string value, bool raw)
+            {
+                if (EncodingVersion < 4 || raw)
+                    Writer.Write(value);
+                else
+                    StringDict.WriteString(value, Writer);
+            }
+
+            static int ToTicks(TimeSpan time) => (int)(time.Ticks / (TimeSpan.TicksPerSecond / DatamodelTicksPerSecond));
+
+            byte IdOf(AttributeKind kind)
+            {
+                ref var id = ref KindIds[(int)kind];
+                if (id == 0)
+                    id = TypeToId(TypeOf(kind), EncodingVersion);
+                return id;
+            }
+
+            byte IdOf(Type arrayType)
+            {
+                if (!ArrayIds.TryGetValue(arrayType, out var id))
+                    ArrayIds[arrayType] = id = TypeToId(arrayType, EncodingVersion);
+                return id;
+            }
+
+            static Type TypeOf(AttributeKind kind) => kind switch
+            {
+                AttributeKind.Int => typeof(int),
+                AttributeKind.Float => typeof(float),
+                AttributeKind.Bool => typeof(bool),
+                AttributeKind.Byte => typeof(byte),
+                AttributeKind.UInt64 => typeof(ulong),
+                AttributeKind.Time => typeof(TimeSpan),
+                AttributeKind.Color => typeof(Color),
+                AttributeKind.Vector2 => typeof(Vector2),
+                AttributeKind.Vector3 => typeof(Vector3),
+                AttributeKind.Vector4 => typeof(Vector4),
+                AttributeKind.Quaternion => typeof(Quaternion),
+                AttributeKind.QAngle => typeof(QAngle),
+                _ => throw new InvalidOperationException("Unrecognised output Type."),
+            };
         }
 
         class DmxBinaryWriter : BinaryWriter

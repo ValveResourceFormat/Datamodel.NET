@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace Datamodel
 {
@@ -98,6 +99,14 @@ namespace Datamodel
             setter(owner, value);
         }
 
+        /// <summary>
+        /// Reads the property in the form an attribute slot stores it, so that a codec writes it without boxing when the binding is typed.
+        /// </summary>
+        internal virtual void Read(AttributeList owner, out AttributeKind kind, out InlineValue inline, out object? reference)
+        {
+            AttributeList.Classify(GetValue(owner), out kind, out inline, out reference);
+        }
+
         public override string ToString() => $"{PropertyName} <{PropertyType.Name}> as \"{AttributeName}\"";
     }
 
@@ -145,6 +154,25 @@ namespace Datamodel
         }
 
         public override TValue Get(AttributeList owner) => getter((TElement)owner);
+
+        /// <summary>The kind a slot stores values of <typeparamref name="TValue"/> as, decided once per type.</summary>
+        static readonly AttributeKind ValueKind = AttributeList.KindOf(typeof(TValue));
+
+        internal override void Read(AttributeList owner, out AttributeKind kind, out InlineValue inline, out object? reference)
+        {
+            var value = getter((TElement)owner);
+            kind = ValueKind;
+            inline = default;
+            if (ValueKind == AttributeKind.Reference)
+            {
+                reference = value;
+            }
+            else
+            {
+                reference = null;
+                Unsafe.As<InlineValue, TValue>(ref inline) = value;
+            }
+        }
 
         public override void Set(AttributeList owner, TValue value)
         {

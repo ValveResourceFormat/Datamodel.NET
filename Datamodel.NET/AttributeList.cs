@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Specialized;
@@ -67,6 +68,17 @@ namespace Datamodel
         public InlineValue Inline;
         public AttributeKind Kind;
         public AttributeList.OverrideType? Override;
+    }
+
+    /// <summary>
+    /// Receives the attributes of an <see cref="AttributeList"/> in the form their slots hold them, so that a codec writes them without boxing. See <see cref="AttributeList.VisitAttributes{TVisitor}"/>.
+    /// </summary>
+    interface IAttributeVisitor
+    {
+        /// <summary>Called once before the attributes, with how many follow.</summary>
+        void Begin(int count);
+
+        void Visit(string name, AttributeKind kind, in InlineValue inline, object? reference);
     }
 
     /// <summary>
@@ -310,18 +322,8 @@ namespace Datamodel
         /// <exception cref="DestubException">Thrown when Element destubbing fails.</exception>
         object? GetValue(int index)
         {
-            if (slots![index].Kind == AttributeKind.Deferred)
-                LoadDeferred(index);
-
-            ref var slot = ref slots[index];
-
-            if (slot.Kind == AttributeKind.Reference && slot.Reference is Element { Stub: true } stub && Owner != null)
-            {
-                try { slot.Reference = Owner.OnStubRequest(stub.ID) ?? stub; }
-                catch (Exception err) { throw new DestubException(this, slot.Name, err); }
-            }
-
-            return RawValue(in slot);
+            Resolve(index);
+            return RawValue(in slots![index]);
         }
 
         void LoadDeferred(int index)
@@ -794,6 +796,111 @@ namespace Datamodel
                 pairs[i] = new AttrKVP(slots![i].Name, GetValue(i));
 
             return ((IEnumerable<AttrKVP>)pairs).GetEnumerator();
+        }
+
+        /// <summary>
+        /// Loads the value of a deferred slot and expands a stub, so that the slot holds its final value.
+        /// </summary>
+        void Resolve(int index)
+        {
+            if (slots![index].Kind == AttributeKind.Deferred)
+                LoadDeferred(index);
+
+            ref var slot = ref slots[index];
+            if (slot.Kind == AttributeKind.Reference && slot.Reference is Element { Stub: true } stub && Owner != null)
+            {
+                try { slot.Reference = Owner.OnStubRequest(stub.ID) ?? stub; }
+                catch (Exception err) { throw new DestubException(this, slot.Name, err); }
+            }
+        }
+
+        /// <summary>
+        /// Passes every attribute a codec writes to the visitor in the form its slot holds it: class properties first, in declaration order, then the plain attributes in the order they were added.
+        /// Deferred values are loaded and stubs expanded first, as <see cref="GetAllAttributesForSerialization"/> does, but no value is boxed and the lock is released before the visitor runs.
+        /// </summary>
+        internal void VisitAttributes<TVisitor>(ref TVisitor visitor) where TVisitor : struct, IAttributeVisitor
+        {
+            var properties = Schema.Properties;
+            AttributeSlot[] copy;
+            int copied;
+
+            lock (Attribute_ChangeLock)
+            {
+                copied = count;
+                copy = ArrayPool<AttributeSlot>.Shared.Rent(copied);
+                for (var i = 0; i < copied; i++)
+                {
+                    Resolve(i);
+                    copy[i] = slots![i];
+                }
+            }
+
+            try
+            {
+                visitor.Begin(properties.Count + copied);
+
+                foreach (var binding in properties)
+                {
+                    binding.Read(this, out var kind, out var inline, out var reference);
+                    visitor.Visit(binding.AttributeName, kind, in inline, reference);
+                }
+
+                for (var i = 0; i < copied; i++)
+                {
+                    ref var slot = ref copy[i];
+                    visitor.Visit(slot.Name, slot.Kind, in slot.Inline, slot.Reference);
+                }
+            }
+            finally
+            {
+                System.Array.Clear(copy, 0, copied);
+                ArrayPool<AttributeSlot>.Shared.Return(copy);
+            }
+        }
+
+        /// <summary>
+        /// Splits a boxed value into the form a slot stores it in. Anything that is not a scalar or vector kind stays a reference, whether or not it is a valid attribute value.
+        /// </summary>
+        internal static void Classify(object? value, out AttributeKind kind, out InlineValue inline, out object? reference)
+        {
+            inline = default;
+            reference = null;
+            switch (value)
+            {
+                case int v: kind = AttributeKind.Int; inline.Int = v; return;
+                case float v: kind = AttributeKind.Float; inline.Float = v; return;
+                case bool v: kind = AttributeKind.Bool; inline.Bool = v; return;
+                case byte v: kind = AttributeKind.Byte; inline.Byte = v; return;
+                case ulong v: kind = AttributeKind.UInt64; inline.UInt64 = v; return;
+                case TimeSpan v: kind = AttributeKind.Time; inline.Ticks = v.Ticks; return;
+                case Color v: kind = AttributeKind.Color; inline.Color = v; return;
+                case Vector2 v: kind = AttributeKind.Vector2; inline.Vector2 = v; return;
+                case Vector3 v: kind = AttributeKind.Vector3; inline.Vector3 = v; return;
+                case Vector4 v: kind = AttributeKind.Vector4; inline.Vector4 = v; return;
+                case Quaternion v: kind = AttributeKind.Quaternion; inline.Quaternion = v; return;
+                case QAngle v: kind = AttributeKind.QAngle; inline.QAngle = v; return;
+                default: kind = AttributeKind.Reference; reference = value; return;
+            }
+        }
+
+        /// <summary>
+        /// The kind a slot stores values of the given type as: inline for the scalar and vector types, a reference for everything else.
+        /// </summary>
+        internal static AttributeKind KindOf(Type type)
+        {
+            if (type == typeof(int)) return AttributeKind.Int;
+            if (type == typeof(float)) return AttributeKind.Float;
+            if (type == typeof(bool)) return AttributeKind.Bool;
+            if (type == typeof(byte)) return AttributeKind.Byte;
+            if (type == typeof(ulong)) return AttributeKind.UInt64;
+            if (type == typeof(TimeSpan)) return AttributeKind.Time;
+            if (type == typeof(Color)) return AttributeKind.Color;
+            if (type == typeof(Vector2)) return AttributeKind.Vector2;
+            if (type == typeof(Vector3)) return AttributeKind.Vector3;
+            if (type == typeof(Vector4)) return AttributeKind.Vector4;
+            if (type == typeof(Quaternion)) return AttributeKind.Quaternion;
+            if (type == typeof(QAngle)) return AttributeKind.QAngle;
+            return AttributeKind.Reference;
         }
 
         #region Interfaces
