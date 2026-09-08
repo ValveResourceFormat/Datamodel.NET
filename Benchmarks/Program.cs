@@ -1,14 +1,15 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Datamodel.Codecs;
 using Tests.VMAP;
 using DM = Datamodel.Datamodel;
 
-// Measures loading a vmap as plain elements and as the typed classes of Tests/ValveMap.cs, and saving the typed model.
+// Measures loading a vmap as plain elements and as the typed classes of Tests.VMAP, and saving the typed model.
 //
 //   Benchmarks [--iterations N] <file or directory>...
 //
 // A directory contributes every .vmap inside it, largest last. Each figure is the best of N iterations (default 1).
-// "typed alloc" is the managed memory allocated by the typed load, "live heap" the managed heap that survives it.
+// "typed alloc" is the managed memory allocated by the typed load, "live heap" the managed heap the typed model keeps, without the file bytes.
 
 // dots as decimal separators whatever the machine locale, so that tables can be pasted anywhere
 System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
@@ -44,40 +45,49 @@ foreach (var path in files)
 {
     var name = Path.GetFileName(path);
     var size = new FileInfo(path).Length;
-
     var read = Time(() => File.ReadAllBytes(path), out var bytes);
-
-    var untyped = double.MaxValue;
-    var typed = double.MaxValue;
-    var save = double.MaxValue;
-    long allocated = 0, heap = 0, elements = 0;
+    var best = new Sample(double.MaxValue, double.MaxValue, double.MaxValue, 0, 0, 0);
 
     for (var i = 0; i < iterations; i++)
     {
-        Collect();
-        untyped = Math.Min(untyped, Time(() => DM.Load(new MemoryStream(bytes, false), DeferredMode.Disabled), out var plain));
-        elements = plain.AllElements.Count;
-        plain.Dispose();
-
-        Collect();
-        var before = GC.GetTotalAllocatedBytes(true);
-        typed = Math.Min(typed, Time(() => DM.Load<CMapRootElement>(new MemoryStream(bytes, false), DeferredMode.Disabled), out var map));
-        allocated = GC.GetTotalAllocatedBytes(true) - before;
-        heap = GC.GetTotalMemory(true);
-
-        if (map.Root is not CMapRootElement)
-        {
-            throw new InvalidOperationException($"{name}: the root was not loaded as {nameof(CMapRootElement)}");
-        }
-
-        save = Math.Min(save, Time(() => { map.Save(Stream.Null, "binary", 9); return 0; }, out _));
-        map.Dispose();
+        var sample = Measure(bytes, name);
+        best = new Sample(Math.Min(best.Untyped, sample.Untyped), Math.Min(best.Typed, sample.Typed), Math.Min(best.Save, sample.Save), sample.Allocated, sample.Heap, sample.Elements);
     }
 
-    Console.WriteLine($"{name,-26} {size / 1048576.0,7:F1}MB {elements,9} | {Duration(read),10} {Duration(untyped),13} {Duration(typed),11} {typed / untyped,12:F2}x | {allocated / 1048576.0,9:F0}MB {heap / 1048576.0,7:F0}MB | {Duration(save),11}");
+    Console.WriteLine($"{name,-26} {size / 1048576.0,7:F1}MB {best.Elements,9} | {Duration(read),10} {Duration(best.Untyped),13} {Duration(best.Typed),11} {best.Typed / best.Untyped,12:F2}x | {best.Allocated / 1048576.0,9:F0}MB {best.Heap / 1048576.0,7:F0}MB | {Duration(best.Save),11}");
 }
 
 return 0;
+
+/// <summary>
+/// One load-save round in a frame of its own, so that every model of the round is garbage once it returns.
+/// The main loop keeps temporaries alive across iterations, which would count the previous model into the next heap figure.
+/// </summary>
+[MethodImpl(MethodImplOptions.NoInlining)]
+static Sample Measure(byte[] bytes, string name)
+{
+    Collect();
+    var untyped = Time(() => DM.Load(new MemoryStream(bytes, false), DeferredMode.Disabled), out var plain);
+    var elements = plain.AllElements.Count;
+    plain.Dispose();
+    plain = null!;
+
+    Collect();
+    var before = GC.GetTotalAllocatedBytes(true);
+    var typed = Time(() => DM.Load<CMapRootElement>(new MemoryStream(bytes, false), DeferredMode.Disabled), out var map);
+    var allocated = GC.GetTotalAllocatedBytes(true) - before;
+    var heap = GC.GetTotalMemory(true) - bytes.Length;
+
+    if (map.Root is not CMapRootElement)
+    {
+        throw new InvalidOperationException($"{name}: the root was not loaded as {nameof(CMapRootElement)}");
+    }
+
+    var save = Time(() => { map.Save(Stream.Null, "binary", 9); return 0; }, out _);
+    map.Dispose();
+
+    return new Sample(untyped, typed, save, allocated, heap, elements);
+}
 
 /// <summary>Milliseconds up to a tenth of a second, seconds with two decimals above.</summary>
 static string Duration(double milliseconds)
@@ -98,3 +108,6 @@ static void Collect()
     GC.WaitForPendingFinalizers();
     GC.Collect();
 }
+
+/// <summary>Times in milliseconds, memory in bytes.</summary>
+record struct Sample(double Untyped, double Typed, double Save, long Allocated, long Heap, long Elements);
