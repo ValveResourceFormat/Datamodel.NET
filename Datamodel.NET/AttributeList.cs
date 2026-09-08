@@ -20,6 +20,8 @@ namespace Datamodel
     enum AttributeKind : byte
     {
         Reference,
+        /// <summary>The value has not been read from the stream yet; <see cref="InlineValue.Ticks"/> holds the position it starts at.</summary>
+        Deferred,
         Int,
         Float,
         Bool,
@@ -63,8 +65,6 @@ namespace Datamodel
         public string Name;
         public object? Reference;
         public InlineValue Inline;
-        /// <summary>When not zero, the value has not been read from the stream yet and starts at this position.</summary>
-        public long Offset;
         public AttributeKind Kind;
         public AttributeList.OverrideType? Override;
     }
@@ -225,7 +225,6 @@ namespace Datamodel
         {
             slot.Kind = kind;
             slot.Reference = null;
-            slot.Offset = 0;
             slot.Inline = default;
             Unsafe.As<InlineValue, T>(ref slot.Inline) = value;
         }
@@ -235,8 +234,6 @@ namespace Datamodel
         /// </summary>
         void Store(ref AttributeSlot slot, object? value)
         {
-            slot.Offset = 0;
-
             switch (value)
             {
                 case null:
@@ -289,6 +286,7 @@ namespace Datamodel
             return slot.Kind switch
             {
                 AttributeKind.Reference => slot.Reference,
+                AttributeKind.Deferred => null,
                 AttributeKind.Int => slot.Inline.Int,
                 AttributeKind.Float => slot.Inline.Float,
                 AttributeKind.Bool => slot.Inline.Bool,
@@ -312,7 +310,7 @@ namespace Datamodel
         /// <exception cref="DestubException">Thrown when Element destubbing fails.</exception>
         object? GetValue(int index)
         {
-            if (slots![index].Offset != 0)
+            if (slots![index].Kind == AttributeKind.Deferred)
                 LoadDeferred(index);
 
             ref var slot = ref slots[index];
@@ -329,7 +327,7 @@ namespace Datamodel
         void LoadDeferred(int index)
         {
             var codec = Owner?.Codec ?? throw new CodecException("Trying to load a deferred Attribute, but could not find codec.");
-            var offset = slots![index].Offset;
+            var offset = slots![index].Inline.Ticks;
             var name = slots[index].Name;
             object? value;
 
@@ -357,10 +355,11 @@ namespace Datamodel
             {
                 var index = Find(name);
                 ref var slot = ref (index < 0 ? ref Append(name) : ref slots![index]);
-                slot.Kind = AttributeKind.Reference;
+                slot.Kind = AttributeKind.Deferred;
                 slot.Reference = null;
                 slot.Override = null;
-                slot.Offset = offset;
+                slot.Inline = default;
+                slot.Inline.Ticks = offset;
             }
         }
 
@@ -515,7 +514,7 @@ namespace Datamodel
                 }
 
                 ref var slot = ref slots![index];
-                value = slot.Offset != 0 ? null : RawValue(in slot);
+                value = RawValue(in slot);
                 return true;
             }
         }
