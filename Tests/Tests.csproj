@@ -4,7 +4,6 @@
     <OutputType>Library</OutputType>
     <RootNamespace>Datamodel_Tests</RootNamespace>
     <AssemblyName>Datamodel.NET-Tests</AssemblyName>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
   <ItemGroup>
     <None Include="Resources\**">

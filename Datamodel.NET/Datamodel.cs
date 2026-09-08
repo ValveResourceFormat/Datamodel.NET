@@ -11,6 +11,8 @@ using System.Numerics;
 using System.Collections.Concurrent;
 using CodecRegistration = System.Tuple<string, int>;
 
+[assembly: System.CLSCompliant(true)]
+
 namespace Datamodel
 {
     /// <summary>

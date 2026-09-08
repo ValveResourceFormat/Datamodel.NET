@@ -13,7 +13,6 @@
     <Description>Implements Valve's Datamodel Exchange (DMX) file format.</Description>
     <PackageProjectUrl>https://github.com/ValveResourceFormat/Datamodel.NET</PackageProjectUrl>
     <PackageTags>valve;dmx;datamodel;keyvalues2;source-engine;vmap</PackageTags>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -46,14 +45,6 @@
     <EmbeddedResource Remove="DmxPad\**" />
     <None Remove="DmxPad\**" />
     <Page Remove="DmxPad\**" />
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Remove="Tests\Properties\AssemblyInfo.cs" />
-    <Compile Remove="Tests\Tests.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Remove="Tests\Properties\AssemblyInfo.cs" />
-    <Compile Remove="Tests\Tests.cs" />
   </ItemGroup>
 
   <ItemGroup>
