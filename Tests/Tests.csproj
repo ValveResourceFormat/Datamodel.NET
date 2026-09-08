@@ -1,7 +1,7 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <OutputType>Library</OutputType>
+    <OutputType>Exe</OutputType>
     <RootNamespace>Datamodel_Tests</RootNamespace>
     <AssemblyName>Datamodel.NET-Tests</AssemblyName>
   </PropertyGroup>
@@ -18,11 +18,9 @@
     <ProjectReference Include="..\Tests.VMAP\Tests.VMAP.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.5.0" />
-    <PackageReference Include="NUnit" Version="3.13.3" />
-    <PackageReference Include="NUnit3TestAdapter" Version="4.4.2" />
+    <PackageReference Include="TUnit" Version="1.65.0" />
   </ItemGroup>
-	
+
   <ItemGroup>
   	<ProjectReference Include="..\ElementFactoryGenerator\ElementFactoryGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>

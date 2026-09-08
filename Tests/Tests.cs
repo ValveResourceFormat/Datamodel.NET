@@ -1,10 +1,11 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.IO;
-using NUnit.Framework;
+using System.Threading.Tasks;
+using TUnit.Assertions.Enums;
 using Datamodel;
 using System.Numerics;
 using DM = Datamodel.Datamodel;
@@ -13,12 +14,24 @@ using Tests.VMAP;
 
 namespace Datamodel_Tests
 {
+    // sadly we must now involve the french in order to test culture invariance
+    public static class TestCulture
+    {
+        [Before(TestSession)]
+        public static void UseDecimalComma()
+        {
+            var culture = new CultureInfo("fr-FR");
+            CultureInfo.DefaultThreadCurrentCulture = culture;
+            CultureInfo.CurrentCulture = culture;
+        }
+    }
+
     public class DatamodelTests
     {
-        protected FileStream Binary_9_File = File.OpenRead(TestContext.CurrentContext.TestDirectory + "/Resources/overboss_run.dmx");
-        protected FileStream Binary_5_File = File.OpenRead(TestContext.CurrentContext.TestDirectory + "/Resources/taunt05_b5.dmx");
-        protected FileStream Binary_4_File = File.OpenRead(TestContext.CurrentContext.TestDirectory + "/Resources/binary4.dmx");
-        protected FileStream KeyValues2_1_File = File.OpenRead(TestContext.CurrentContext.TestDirectory + "/Resources/taunt05.dmx");
+        protected FileStream Binary_9_File = File.OpenRead(TestContext.TestDirectory + "/Resources/overboss_run.dmx");
+        protected FileStream Binary_5_File = File.OpenRead(TestContext.TestDirectory + "/Resources/taunt05_b5.dmx");
+        protected FileStream Binary_4_File = File.OpenRead(TestContext.TestDirectory + "/Resources/binary4.dmx");
+        protected FileStream KeyValues2_1_File = File.OpenRead(TestContext.TestDirectory + "/Resources/taunt05.dmx");
 
         const string GameBin = @"D:/Steam/steamapps/common/Counter-Strike Global Offensive/game/bin/win64";
 
@@ -27,9 +40,6 @@ namespace Datamodel_Tests
 
         static DatamodelTests()
         {
-            CultureInfo.DefaultThreadCurrentCulture = new CultureInfo("fr-FR");
-            CultureInfo.DefaultThreadCurrentUICulture = new CultureInfo("fr-FR");
-
             var binary = new byte[16];
             Random.Shared.NextBytes(binary);
             var quat = Quaternion.Normalize(new Quaternion(1, 2, 3, 4)); // dmxconvert will normalise this if I don't!
@@ -59,15 +69,17 @@ namespace Datamodel_Tests
             }).ToList();
         }
 
+        /// <summary>The name of the running test, used to keep the files each test writes apart.</summary>
+        protected static string TestName => TestContext.Current?.Metadata.TestName ?? "test";
 
         protected static string OutPath
-            => Path.Combine(TestContext.CurrentContext.TestDirectory, TestContext.CurrentContext.Test.Name);
+            => Path.Combine(TestContext.TestDirectory!, TestName);
         protected static string DmxSavePath { get { return OutPath + ".dmx"; } }
         protected static string DmxConvertPath { get { return OutPath + "_convert.dmx"; } }
 
-        protected static string[] GetDmxFiles()
+        public static IEnumerable<string> GetDmxFiles()
         {
-            var path = Path.Combine(TestContext.CurrentContext.TestDirectory, "Resources");
+            var path = Path.Combine(TestContext.TestDirectory!, "Resources");
             return Enumerable.Concat(
                 Directory.GetFiles(path, "*.dmx"),
                 Directory.GetFiles(path, "*.vmap")
@@ -88,13 +100,13 @@ namespace Datamodel_Tests
             return new DM("model", 1); // using "model" to keep dxmconvert happy
         }
 
-        protected static bool SaveAndConvert(DM datamodel, string encoding, int version)
+        protected static async Task<bool> SaveAndConvert(DM datamodel, string encoding, int version)
         {
             datamodel.Save(DmxSavePath, encoding, version);
 
             if (!DmxConvertExe_Exists)
             {
-                Assert.Warn("dmxconvert.exe not available.");
+                Console.WriteLine("dmxconvert.exe not available.");
                 return false;
             }
 
@@ -111,14 +123,14 @@ namespace Datamodel_Tests
                 }
             };
 
-            Console.WriteLine($"Converting {TestContext.CurrentContext.Test.Name}.dmx to {encoding}");
+            Console.WriteLine($"Converting {TestName}.dmx to {encoding}");
 
             dmxconvert.Start();
             var err = dmxconvert.StandardOutput.ReadToEnd();
             err += dmxconvert.StandardError.ReadToEnd();
             dmxconvert.WaitForExit();
 
-            Assert.That(dmxconvert.ExitCode, Is.Zero, $"dmxconvert failed to convert the file with error: {err}");
+            await Assert.That(dmxconvert.ExitCode).IsZero().Because($"dmxconvert failed to convert the file with error: {err}");
 
             return true;
         }
@@ -158,7 +170,7 @@ namespace Datamodel_Tests
                 throw new ArgumentException("Unrecognised encoding.");
         }
 
-        protected static void Populate(Datamodel.Datamodel dm, string encoding_name, int encoding_version)
+        protected static async Task Populate(Datamodel.Datamodel dm, string encoding_name, int encoding_version)
         {
             dm.Root = new Element(dm, "root", RootGuid);
 
@@ -168,14 +180,14 @@ namespace Datamodel_Tests
                 var name = value.GetType().Name;
 
                 dm.Root[name] = value;
-                Assert.AreSame(value, dm.Root[name]);
+                await Assert.That(dm.Root[name]).IsSameReferenceAs(value);
 
                 name += " array";
                 var list = value.GetType().MakeListType().GetConstructor(Type.EmptyTypes).Invoke(null) as IList;
                 list.Add(value);
                 list.Add(value);
                 dm.Root[name] = list;
-                Assert.AreSame(list, dm.Root[name]);
+                await Assert.That(dm.Root[name]).IsSameReferenceAs(list);
             }
 
             dm.Root["Recursive"] = dm.Root;
@@ -184,48 +196,38 @@ namespace Datamodel_Tests
             dm.Root["ElementStub"] = new Element(dm, Guid.NewGuid());
         }
 
-        private void CompareVector(DM dm, string name, float[] actual)
-        {
-            var expected = (IEnumerable<float>)dm.Root[name];
-
-            Assert.AreEqual(actual.Count(), expected.Count());
-
-            foreach (var t in actual.Zip(expected, (a, e) => new Tuple<float, float>(a, e)))
-                Assert.AreEqual(t.Item1, t.Item2, 1e-6, name);
-        }
-
-        protected static void ValidatePopulated(string encoding_name, int encoding_version)
+        protected static async Task ValidatePopulated(string encoding_name, int encoding_version)
         {
             var dm = DM.Load(DmxConvertPath);
-            Assert.AreEqual(RootGuid, dm.Root.ID);
+            await Assert.That(dm.Root.ID).IsEqualTo(RootGuid);
             foreach (var value in AttributeValuesFor(encoding_name, encoding_version))
             {
                 if (value == null) continue;
                 var name = value.GetType().Name;
 
                 if (value is ICollection collection)
-                    CollectionAssert.AreEqual(collection, (ICollection)dm.Root[name]);
+                    await Assert.That(((ICollection)dm.Root[name]).Cast<object>()).IsEquivalentTo(collection.Cast<object>(), CollectionOrdering.Matching).Because(name);
                 else if (value is Color color)
-                    Assert.AreEqual(color, dm.Root.Get<Color>(name));
+                    await Assert.That(dm.Root.Get<Color>(name)).IsEqualTo(color);
                 else if (value is Quaternion quat)
                 {
                     var expected = dm.Root.Get<Quaternion>(name);
-                    Assert.AreEqual(quat.W, expected.W, 1e-6, name + " W");
-                    Assert.AreEqual(quat.X, expected.X, 1e-6, name + " X");
-                    Assert.AreEqual(quat.Y, expected.Y, 1e-6, name + " Y");
-                    Assert.AreEqual(quat.Z, expected.Z, 1e-6, name + " Z");
+                    await Assert.That(expected.W).IsEqualTo(quat.W).Within(1e-6f).Because(name + " W");
+                    await Assert.That(expected.X).IsEqualTo(quat.X).Within(1e-6f).Because(name + " X");
+                    await Assert.That(expected.Y).IsEqualTo(quat.Y).Within(1e-6f).Because(name + " Y");
+                    await Assert.That(expected.Z).IsEqualTo(quat.Z).Within(1e-6f).Because(name + " Z");
                 }
                 else
-                    Assert.AreEqual(value, dm.Root[name], name);
+                    await Assert.That(dm.Root[name]).IsEqualTo(value).Because(name);
             }
 
             dm.Dispose();
         }
 
-        protected static DM Create(string encoding, int version, bool memory_save = false)
+        protected static async Task<DM> Create(string encoding, int version, bool memory_save = false)
         {
             var dm = MakeDatamodel();
-            Populate(dm, encoding, version);
+            await Populate(dm, encoding, version);
 
             dm.Root["Arr"] = new System.Collections.ObjectModel.ObservableCollection<int>();
             dm.Root.GetArray<int>("Arr");
@@ -235,28 +237,27 @@ namespace Datamodel_Tests
             else
             {
                 dm.Save(DmxSavePath, encoding, version);
-                if (SaveAndConvert(dm, encoding, version))
+                if (await SaveAndConvert(dm, encoding, version))
                 {
-                    ValidatePopulated(encoding, version);
+                    await ValidatePopulated(encoding, version);
                 }
                 Cleanup();
             }
 
             dm.AllElements.Remove(dm.Root.GetArray<Element>("ElemArray")[3], DM.ElementList.RemoveMode.MakeStubs);
-            Assert.AreEqual(true, dm.Root.GetArray<Element>("ElemArray")[3].Stub);
+            await Assert.That(dm.Root.GetArray<Element>("ElemArray")[3].Stub).IsTrue();
 
             dm.AllElements.Remove(dm.Root, DM.ElementList.RemoveMode.MakeStubs);
-            Assert.AreEqual(true, dm.Root.Stub);
+            await Assert.That(dm.Root.Stub).IsTrue();
 
             return dm;
         }
     }
 
-    [TestFixture]
     public class Functionality : DatamodelTests
     {
         [Test]
-        public static void ElementEqualityMatchesHashCode()
+        public async Task ElementEqualityMatchesHashCode()
         {
             var id = Guid.NewGuid();
             var element = new Element { ID = id };
@@ -264,33 +265,33 @@ namespace Datamodel_Tests
             var otherId = new Element { ID = Guid.NewGuid() };
 
             // Equality is by ID, so anything hashing these has to agree.
-            Assert.True(element.Equals(sameId));
-            Assert.True(element.Equals((object)sameId));
-            Assert.AreEqual(element.GetHashCode(), sameId.GetHashCode());
+            await Assert.That(element.Equals(sameId)).IsTrue();
+            await Assert.That(element.Equals((object)sameId)).IsTrue();
+            await Assert.That(sameId.GetHashCode()).IsEqualTo(element.GetHashCode());
 
-            Assert.False(element.Equals(otherId));
-            Assert.False(element.Equals((object)otherId));
-            Assert.False(element.Equals(null));
-            Assert.False(element.Equals("not an element"));
+            await Assert.That(element.Equals(otherId)).IsFalse();
+            await Assert.That(element.Equals((object)otherId)).IsFalse();
+            await Assert.That(element.Equals(null)).IsFalse();
+            await Assert.That(element.Equals("not an element")).IsFalse();
 
             var set = new HashSet<Element> { element };
-            Assert.True(set.Contains(sameId));
-            Assert.False(set.Add(sameId));
-            Assert.True(set.Add(otherId));
+            await Assert.That(set.Contains(sameId)).IsTrue();
+            await Assert.That(set.Add(sameId)).IsFalse();
+            await Assert.That(set.Add(otherId)).IsTrue();
 
             var dictionary = new Dictionary<Element, int> { [element] = 1 };
-            Assert.True(dictionary.ContainsKey(sameId));
-            Assert.AreEqual(1, dictionary[sameId]);
+            await Assert.That(dictionary.ContainsKey(sameId)).IsTrue();
+            await Assert.That(dictionary[sameId]).IsEqualTo(1);
         }
 
         [Test]
-        public static void ElementHashCollisionsStayDistinct()
+        public async Task ElementHashCollisionsStayDistinct()
         {
             // Guid.GetHashCode folds 128 bits into 32, so distinct IDs can share a hash code. These two do.
             var a = new Guid("ee080de0-48b6-4173-86ba-9c6bc7b989ef");
             var b = new Guid("2e3e559b-4817-441f-aaad-d9b931f696f8");
-            Assert.AreNotEqual(a, b);
-            Assert.AreEqual(a.GetHashCode(), b.GetHashCode(), "these GUIDs were chosen because their hashes collide");
+            await Assert.That(a).IsNotEqualTo(b);
+            await Assert.That(b.GetHashCode()).IsEqualTo(a.GetHashCode()).Because("these GUIDs were chosen because their hashes collide");
 
             using var dm = MakeDatamodel();
             dm.Root = new Element(dm, "root", Guid.NewGuid());
@@ -300,9 +301,9 @@ namespace Datamodel_Tests
             dm.Root["second"] = second;
 
             // A colliding hash only shares a bucket; Equals still has to separate them.
-            Assert.False(first.Equals(second));
+            await Assert.That(first.Equals(second)).IsFalse();
             var set = new HashSet<Element> { first, second };
-            Assert.AreEqual(2, set.Count);
+            await Assert.That(set.Count).IsEqualTo(2);
 
             foreach (var (encoding, version) in new[] { ("binary", 9), ("keyvalues2", 4) })
             {
@@ -311,16 +312,16 @@ namespace Datamodel_Tests
                 stream.Seek(0, SeekOrigin.Begin);
 
                 using var loaded = DM.Load(stream);
-                Assert.AreEqual(3, loaded.AllElements.Count, encoding);
-                Assert.AreEqual(a, loaded.Root.Get<Element>("first").ID, encoding);
-                Assert.AreEqual(b, loaded.Root.Get<Element>("second").ID, encoding);
-                Assert.AreEqual("first", loaded.Root.Get<Element>("first").Name, encoding);
-                Assert.AreEqual("second", loaded.Root.Get<Element>("second").Name, encoding);
+                await Assert.That(loaded.AllElements.Count).IsEqualTo(3).Because(encoding);
+                await Assert.That(loaded.Root.Get<Element>("first").ID).IsEqualTo(a).Because(encoding);
+                await Assert.That(loaded.Root.Get<Element>("second").ID).IsEqualTo(b).Because(encoding);
+                await Assert.That(loaded.Root.Get<Element>("first").Name).IsEqualTo("first").Because(encoding);
+                await Assert.That(loaded.Root.Get<Element>("second").Name).IsEqualTo("second").Because(encoding);
             }
         }
 
         [Test]
-        public static void TypedArrayAddingRemoving()
+        public async Task TypedArrayAddingRemoving()
         {
             using var dm = MakeDatamodel();
             var array = new ElementArray();
@@ -328,19 +329,19 @@ namespace Datamodel_Tests
             var elementA = new Element(dm, "a");
             var elementB = new Element();
 
-            Assert.False(array.Remove(elementB));
-            Assert.False(array.Remove(elementA));
+            await Assert.That(array.Remove(elementB)).IsFalse();
+            await Assert.That(array.Remove(elementA)).IsFalse();
 
             dm.Root["a"] = array;
 
-            Assert.False(array.Remove(elementB));
-            Assert.False(array.Remove(elementA));
+            await Assert.That(array.Remove(elementB)).IsFalse();
+            await Assert.That(array.Remove(elementA)).IsFalse();
 
             array.Add(elementB);
-            Assert.True(array.Remove(elementB));
+            await Assert.That(array.Remove(elementB)).IsTrue();
 
-            Assert.False(array.Remove(elementB));
-            Assert.False(array.Remove(elementA));
+            await Assert.That(array.Remove(elementB)).IsFalse();
+            await Assert.That(array.Remove(elementA)).IsFalse();
 
             ((IList)array).Add(elementA);
             array.Add(elementB);
@@ -348,45 +349,45 @@ namespace Datamodel_Tests
             array.Add(elementA); // add again?
             array.Remove(elementA);
 
-            Assert.AreEqual(2, array.Count); // only removes first instance
+            await Assert.That(array.Count).IsEqualTo(2); // only removes first instance
 
             array.Remove(elementA);
             array.Remove(elementB);
 
-            Assert.AreEqual(0, array.Count);
+            await Assert.That(array.Count).IsEqualTo(0);
         }
 
-        private static void Validate_Vmap_Reflection(Datamodel.Datamodel unserialisedVmap)
+        private static async Task Validate_Vmap_Reflection(Datamodel.Datamodel unserialisedVmap)
         {
-            Assert.AreEqual(typeof(CMapRootElement), unserialisedVmap.Root.GetType());
+            await Assert.That(unserialisedVmap.Root.GetType()).IsEqualTo(typeof(CMapRootElement));
 
             CMapRootElement root = (CMapRootElement)unserialisedVmap.Root;
 
-            Assert.AreEqual(typeof(CMapWorld), root.World.GetType());
+            await Assert.That(root.World.GetType()).IsEqualTo(typeof(CMapWorld));
 
             var world = root.World;
 
             var props = world.GetChildren<CMapEntity>().ToList();
-            Assert.That(props, Is.Not.Empty);
-            Assert.That(props[0].GetEntityClassName(), Is.Not.Null);
+            await Assert.That(props).IsNotEmpty();
+            await Assert.That(props[0].GetEntityClassName()).IsNotNull();
 
             var meshes = world.GetChildren<CMapMesh>().ToList();
             var mesh = meshes[0];
 
             var vertexData = mesh.MeshData.VertexData;
 
-            Assert.AreEqual(vertexData.Size, 8);
-            Assert.AreEqual(vertexData.Streams[0]["semanticName"], "position");
+            await Assert.That(vertexData.Size).IsEqualTo(8);
+            await Assert.That(vertexData.Streams[0]["semanticName"]).IsEqualTo("position");
 
             var typedPolygonMeshData = (CDmePolygonMeshDataStream)vertexData.Streams[0];
-            Assert.AreEqual(typedPolygonMeshData.SemanticName, "position");
+            await Assert.That(typedPolygonMeshData.SemanticName).IsEqualTo("position");
 
             var typedPolygonMeshDataStream = typedPolygonMeshData.Data as Vector3Array;
-            Assert.IsNotNull(typedPolygonMeshDataStream);
-            Assert.That(vertexData.GetStreamData<Vector3>("position"), Is.SameAs(typedPolygonMeshDataStream));
-            Assert.That(mesh.MeshData.FaceVertexData.GetStreamData<Vector3>("normal"), Is.Not.Null);
+            await Assert.That(typedPolygonMeshDataStream).IsNotNull();
+            await Assert.That(vertexData.GetStreamData<Vector3>("position")).IsSameReferenceAs(typedPolygonMeshDataStream);
+            await Assert.That(mesh.MeshData.FaceVertexData.GetStreamData<Vector3>("normal")).IsNotNull();
 
-            Assert.That(unserialisedVmap.PrefixAttributes["map_asset_references"], Is.Not.Empty);
+            await Assert.That(((StringArray)unserialisedVmap.PrefixAttributes["map_asset_references"]!).Count).IsGreaterThan(0);
 
             // iterate all datamodel elements, and verify that all their types are superclasses of Element
             foreach (var elem in unserialisedVmap.AllElements)
@@ -402,78 +403,78 @@ namespace Datamodel_Tests
                     continue;
                 }
 
-                Assert.That(elem, Is.Not.TypeOf<Element>(), $"Found object {elem.ID} {elem.ClassName} that is still an Element type.");
+                await Assert.That(elem.GetType()).IsNotEqualTo(typeof(Element)).Because($"Found object {elem.ID} {elem.ClassName} that is still an Element type.");
             }
         }
 
         [Test]
-        public void LoadVmap_Reflection_Binary()
+        public async Task LoadVmap_Reflection_Binary()
         {
-            var unserialisedVmap = DM.Load<CMapRootElement>(Path.Combine(TestContext.CurrentContext.TestDirectory, "Resources", "cs2_map.vmap"));
-            Validate_Vmap_Reflection(unserialisedVmap);
+            var unserialisedVmap = DM.Load<CMapRootElement>(Path.Combine(TestContext.TestDirectory!, "Resources", "cs2_map.vmap"));
+            await Validate_Vmap_Reflection(unserialisedVmap);
         }
 
         [Test]
-        public void LoadVmap_Reflection_Text()
+        public async Task LoadVmap_Reflection_Text()
         {
-            var unserialisedVmap = DM.Load<CMapRootElement>(Path.Combine(TestContext.CurrentContext.TestDirectory, "Resources", "cs2_map.vmap.txt"));
-            Validate_Vmap_Reflection(unserialisedVmap);
+            var unserialisedVmap = DM.Load<CMapRootElement>(Path.Combine(TestContext.TestDirectory!, "Resources", "cs2_map.vmap.txt"));
+            await Validate_Vmap_Reflection(unserialisedVmap);
         }
 
         public class NullOwnerElement
         {
             [Test]
-            public void ElementInitializes()
+            public async Task ElementInitializes()
             {
                 var elem = new Element();
 
-                Assert.That(elem.Owner, Is.Null);
-                Assert.That(elem.Count, Is.Zero);
+                await Assert.That(elem.Owner).IsNull();
+                await Assert.That(elem.Count).IsZero();
             }
 
             [Test]
-            public void CanImportToRoot()
+            public async Task CanImportToRoot()
             {
                 var elem = new Element();
 
                 var dm = new DM("test", 1);
                 dm.Root = elem;
 
-                Assert.That(elem.Owner, Is.EqualTo(dm));
+                await Assert.That(elem.Owner).IsEqualTo(dm);
             }
 
             [Test]
-            public void Nested_CanImportToRoot()
+            public async Task Nested_CanImportToRoot()
             {
                 var elem = new Element();
                 var elem2 = new Element();
                 elem["elem2"] = elem2;
                 elem2["woah"] = 5;
 
-                Assert.That(elem.Owner, Is.Null);
-                Assert.That(elem.Count, Is.EqualTo(1));
-                Assert.That(elem2.Owner, Is.Null);
-                Assert.That(elem2.Count, Is.EqualTo(1));
+                await Assert.That(elem.Owner).IsNull();
+                await Assert.That(elem.Count).IsEqualTo(1);
+                await Assert.That(elem2.Owner).IsNull();
+                await Assert.That(elem2.Count).IsEqualTo(1);
 
-                Assert.That(elem.First().Key, Is.EqualTo("elem2"));
-                Assert.That(elem.First().Value, Is.EqualTo(elem2));
-                Assert.That(elem2.First().Key, Is.EqualTo("woah"));
-                Assert.That(elem2.First().Value, Is.EqualTo(5));
+                await Assert.That(elem.First().Key).IsEqualTo("elem2");
+                await Assert.That(elem.First().Value).IsEqualTo(elem2);
+                await Assert.That(elem2.First().Key).IsEqualTo("woah");
+                await Assert.That(elem2.First().Value).IsEqualTo(5);
 
                 var dm = new DM("test", 1);
                 dm.Root = elem;
 
-                Assert.That(elem.Owner, Is.EqualTo(dm));
-                Assert.That(elem2.Owner, Is.EqualTo(dm));
+                await Assert.That(elem.Owner).IsEqualTo(dm);
+                await Assert.That(elem2.Owner).IsEqualTo(dm);
             }
 
             [Test]
-            public void ElementArrayInitializes()
+            public async Task ElementArrayInitializes()
             {
                 var elem = new ElementArray();
 
-                Assert.That(elem.Owner, Is.Null);
-                Assert.That(elem.Count, Is.Zero);
+                await Assert.That(elem.Owner).IsNull();
+                await Assert.That(elem.Count).IsZero();
             }
         }
 
@@ -485,62 +486,62 @@ namespace Datamodel_Tests
             }
 
             [Test]
-            public void ElementSubclassInitializes()
+            public async Task ElementSubclassInitializes()
             {
                 var elem = new CustomElement();
 
-                Assert.That(elem.Owner, Is.Null);
-                Assert.That(elem.Count, Is.Zero);
-                Assert.That(elem.MyProperty, Is.EqualTo(1337));
+                await Assert.That(elem.Owner).IsNull();
+                await Assert.That(elem.Count).IsZero();
+                await Assert.That(elem.MyProperty).IsEqualTo(1337);
             }
 
             [Test]
-            public void PropertyAccessByKey()
+            public async Task PropertyAccessByKey()
             {
                 var elem = new CustomElement();
                 var myprop = elem["MyProperty"];
 
-                Assert.That(myprop, Is.EqualTo(1337));
+                await Assert.That(myprop).IsEqualTo(1337);
             }
 
             [Test]
-            public void CanBeAssignedToDatamodelRoot()
+            public async Task CanBeAssignedToDatamodelRoot()
             {
                 var elem = new CustomElement();
 
                 var dm = new DM("test", 1);
                 dm.Root = elem;
 
-                Assert.That(elem.Owner, Is.EqualTo(dm));
+                await Assert.That(elem.Owner).IsEqualTo(dm);
             }
 
             [Test]
-            public void Nested_CanBeAssignedToDatamodelRoot()
+            public async Task Nested_CanBeAssignedToDatamodelRoot()
             {
                 var elem = new CustomElement();
                 var elem2 = new CustomElement();
                 elem["elem2"] = elem2;
                 elem2["woah"] = 5;
 
-                Assert.That(elem.Owner, Is.Null);
-                Assert.That(elem.Count, Is.EqualTo(1));
-                Assert.That(elem2.Owner, Is.Null);
-                Assert.That(elem2.Count, Is.EqualTo(1));
+                await Assert.That(elem.Owner).IsNull();
+                await Assert.That(elem.Count).IsEqualTo(1);
+                await Assert.That(elem2.Owner).IsNull();
+                await Assert.That(elem2.Count).IsEqualTo(1);
 
-                Assert.That(elem.First().Key, Is.EqualTo("elem2"));
-                Assert.That(elem.First().Value, Is.EqualTo(elem2));
-                Assert.That(elem2.First().Key, Is.EqualTo("woah"));
-                Assert.That(elem2.First().Value, Is.EqualTo(5));
+                await Assert.That(elem.First().Key).IsEqualTo("elem2");
+                await Assert.That(elem.First().Value).IsEqualTo(elem2);
+                await Assert.That(elem2.First().Key).IsEqualTo("woah");
+                await Assert.That(elem2.First().Value).IsEqualTo(5);
 
                 var dm = new DM("test", 1);
                 dm.Root = elem;
 
-                Assert.That(elem.Owner, Is.EqualTo(dm));
-                Assert.That(elem2.Owner, Is.EqualTo(dm));
+                await Assert.That(elem.Owner).IsEqualTo(dm);
+                await Assert.That(elem2.Owner).IsEqualTo(dm);
             }
 
             [Test]
-            public void SerializesText()
+            public async Task SerializesText()
             {
                 var elem = new CustomElement();
                 using var dm = new DM("vmap", 29);
@@ -556,16 +557,16 @@ namespace Datamodel_Tests
                 {
                     var text = reader.ReadToEnd();
 
-                    Assert.Multiple(() =>
+                    using (Assert.Multiple())
                     {
-                        Assert.That(text, Does.Contain("CustomElement"));
-                        Assert.That(text, Does.Contain("MyProperty"));
-                        Assert.That(text, Does.Contain("1337"));
-                        Assert.That(text, Does.Contain("\"as_child\" \"CustomElement\""));
-                    });
+                        await Assert.That(text).Contains("CustomElement");
+                        await Assert.That(text).Contains("MyProperty");
+                        await Assert.That(text).Contains("1337");
+                        await Assert.That(text).Contains("\"as_child\" \"CustomElement\"");
+                    }
                 }
 
-                SaveAndConvert(dm, "keyvalues2", 4);
+                await SaveAndConvert(dm, "keyvalues2", 4);
 
                 // binary
                 using var stream2 = new MemoryStream();
@@ -575,52 +576,47 @@ namespace Datamodel_Tests
                 using var reader2 = new BinaryReader(stream2);
                 var bytes = reader2.ReadBytes((int)stream2.Length);
 
-                // idk
-                //Assert.That(bytes, Does.Contain(
-                //    [.. Encoding.ASCII.GetBytes("CustomElement")]
-                //));
-
-                SaveAndConvert(dm, "binary", 9);
+                await SaveAndConvert(dm, "binary", 9);
             }
         }
 
         [Test]
-        public void Create_Binary_9()
+        public async Task Create_Binary_9()
         {
-            Create("binary", 9);
+            await Create("binary", 9);
         }
         [Test]
-        public void Create_Binary_5()
+        public async Task Create_Binary_5()
         {
-            Create("binary", 5);
+            await Create("binary", 5);
         }
         [Test]
-        public void Create_Binary_4()
+        public async Task Create_Binary_4()
         {
-            Create("binary", 4);
+            await Create("binary", 4);
         }
         [Test]
-        public void Create_Binary_3()
+        public async Task Create_Binary_3()
         {
-            Create("binary", 3);
+            await Create("binary", 3);
         }
         [Test]
-        public void Create_Binary_2()
+        public async Task Create_Binary_2()
         {
-            Create("binary", 2);
-        }
-
-        [Test]
-        public void Create_KeyValues2_4()
-        {
-            Create("keyvalues2", 4);
+            await Create("binary", 2);
         }
 
+        [Test]
+        public async Task Create_KeyValues2_4()
+        {
+            await Create("keyvalues2", 4);
+        }
+
 
         [Test]
-        public void Create_KeyValues2_1()
+        public async Task Create_KeyValues2_1()
         {
-            Create("keyvalues2", 1);
+            await Create("keyvalues2", 1);
         }
 
         void Get_TF2(Datamodel.Datamodel dm)
@@ -630,50 +626,51 @@ namespace Datamodel_Tests
         }
 
         [Test]
-        public void Dota2_Binary_9()
+        public async Task Dota2_Binary_9()
         {
             var dm = DM.Load<Element>(Binary_9_File);
             PrintContents(dm);
             dm.Root.Get<Element>("skeleton").GetArray<Element>("children")[0].Any();
-            SaveAndConvert(dm, "binary", 9);
+            await SaveAndConvert(dm, "binary", 9);
 
             Cleanup();
         }
 
         [Test]
-        public void TF2_Binary_5()
+        public async Task TF2_Binary_5()
         {
             var dm = DM.Load(Binary_5_File);
             PrintContents(dm);
             Get_TF2(dm);
-            SaveAndConvert(dm, "binary", 5);
+            await SaveAndConvert(dm, "binary", 5);
 
             Cleanup();
         }
 
         [Test]
-        public void TF2_Binary_4()
+        public async Task TF2_Binary_4()
         {
             var dm = DM.Load(Binary_4_File);
             PrintContents(dm);
             Get_TF2(dm);
-            SaveAndConvert(dm, "binary", 4);
+            await SaveAndConvert(dm, "binary", 4);
 
             Cleanup();
         }
 
         [Test]
-        public void TF2_KeyValues2_1()
+        public async Task TF2_KeyValues2_1()
         {
             var dm = DM.Load(KeyValues2_1_File);
             PrintContents(dm);
             Get_TF2(dm);
-            SaveAndConvert(dm, "keyvalues2", 1);
+            await SaveAndConvert(dm, "keyvalues2", 1);
 
             Cleanup();
         }
 
-        [Test, TestCaseSource(nameof(GetDmxFiles))]
+        [Test]
+        [MethodDataSource(nameof(GetDmxFiles))]
         public void Unserialize(string path)
         {
             var dm = DM.Load(path, Datamodel.Codecs.DeferredMode.Automatic);
@@ -684,29 +681,28 @@ namespace Datamodel_Tests
         [Test]
         public void Cs2MapConvert()
         {
-            var file = Path.Combine(TestContext.CurrentContext.TestDirectory, "Resources", "cs2_map.vmap");
-            var dm = DM.Load(file);
+            using var dm = DM.Load(Path.Combine(TestContext.TestDirectory!, "Resources", "cs2_map.vmap"));
 
-            // file will be in bin/Debug/net6.0/Resources
-            dm.Save(file + "datamodel.txt", "keyvalues2", 4);
-            dm.Save(file + "datamodel.vmap", dm.Encoding, dm.EncodingVersion);
+            // written next to the other test outputs, not into Resources where Unserialize would pick them up as inputs
+            dm.Save(OutPath + ".txt", "keyvalues2", 4);
+            dm.Save(OutPath + ".vmap", dm.Encoding, dm.EncodingVersion);
         }
 
         [Test]
-        public void Import()
+        public async Task Import()
         {
             var dm = MakeDatamodel();
-            Populate(dm, "binary", 9);
+            await Populate(dm, "binary", 9);
 
             var dm2 = MakeDatamodel();
             dm2.Root = dm2.ImportElement(dm.Root, DM.ImportRecursionMode.Recursive, DM.ImportOverwriteMode.All);
 
-            SaveAndConvert(dm, "keyvalues2", 4);
-            SaveAndConvert(dm, "binary", 9);
+            await SaveAndConvert(dm, "keyvalues2", 4);
+            await SaveAndConvert(dm, "binary", 9);
         }
     }
 
-    [TestFixture, Category("Performance")]
+    [Category("Performance")]
     public class Performance : DatamodelTests
     {
         const int Load_Iterations = 10;
@@ -743,14 +739,14 @@ namespace Datamodel_Tests
         }
 
         [Test]
-        public void Perf_Create_Binary5()
+        public async Task Perf_Create_Binary5()
         {
             foreach (var i in Enumerable.Range(0, 1000))
-                Create("binary", 5, true);
+                await Create("binary", 5, true);
         }
 
         [Test]
-        public void Perf_CreateElements_Binary5()
+        public async Task Perf_CreateElements_Binary5()
         {
             var dm = MakeDatamodel();
             dm.Root = new Element(dm, "root");
@@ -761,12 +757,12 @@ namespace Datamodel_Tests
             foreach (int i in Enumerable.Range(0, 19999))
                 arr.Add(inner_elem);
 
-            SaveAndConvert(dm, "binary", 5);
+            await SaveAndConvert(dm, "binary", 5);
             Cleanup();
         }
 
         [Test]
-        public void Perf_CreateAttributes_Binary5()
+        public async Task Perf_CreateAttributes_Binary5()
         {
             var dm = MakeDatamodel();
             dm.Root = new Element(dm, "root");
@@ -783,7 +779,7 @@ namespace Datamodel_Tests
                 }
             }
 
-            SaveAndConvert(dm, "binary", 5);
+            await SaveAndConvert(dm, "binary", 5);
             Cleanup();
         }
     }

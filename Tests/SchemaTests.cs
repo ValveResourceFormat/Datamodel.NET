@@ -2,7 +2,8 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Numerics;
-using NUnit.Framework;
+using System.Threading.Tasks;
+using TUnit.Assertions.Enums;
 using Datamodel;
 using Datamodel.Codecs;
 using Datamodel.Format;
@@ -51,72 +52,71 @@ namespace Datamodel_Tests
     /// <summary>
     /// The ElementFactory generated into this assembly registers itself and describes the properties of every Element subclass.
     /// </summary>
-    [TestFixture]
     public class SchemaTests
     {
-        static string Resource(string name) => Path.Combine(TestContext.CurrentContext.TestDirectory, "Resources", name);
+        static string Resource(string name) => Path.Combine(TestContext.TestDirectory!, "Resources", name);
 
         [Test]
-        public void Factory_IsRegisteredWhenTheAssemblyInitialises()
+        public async Task Factory_IsRegisteredWhenTheAssemblyInitialises()
         {
             // every assembly with Element subclasses gets a factory: the schema assembly and this one
             var schemaFactory = DM.ElementFactories.SingleOrDefault(f => f.GetType().Assembly == typeof(CMapMesh).Assembly);
             var testFactory = DM.ElementFactories.SingleOrDefault(f => f.GetType().Assembly == typeof(SchemaTests).Assembly);
 
-            Assert.That(schemaFactory, Is.Not.Null);
-            Assert.That(schemaFactory!.Create("Tests.VMAP", "CMapMesh"), Is.InstanceOf<CMapMesh>());
-            Assert.That(schemaFactory.Create("Tests.VMAP", "NoSuchClass"), Is.Null);
-            Assert.That(schemaFactory.Create("Other.Namespace", "CMapMesh"), Is.Null);
-            Assert.That(schemaFactory.Schemas.Select(schema => schema.ElementType), Does.Contain(typeof(CMapMesh)));
+            await Assert.That(schemaFactory).IsNotNull();
+            await Assert.That(schemaFactory!.Create("Tests.VMAP", "CMapMesh")).IsTypeOf<CMapMesh>();
+            await Assert.That(schemaFactory.Create("Tests.VMAP", "NoSuchClass")).IsNull();
+            await Assert.That(schemaFactory.Create("Other.Namespace", "CMapMesh")).IsNull();
+            await Assert.That(schemaFactory.Schemas.Select(schema => schema.ElementType)).Contains(typeof(CMapMesh));
 
-            Assert.That(testFactory, Is.Not.Null);
-            Assert.That(testFactory!.Create("Datamodel_Tests", "SchemaTestElement"), Is.InstanceOf<SchemaTestElement>());
-            Assert.That(testFactory.Create("Tests.VMAP", "CMapMesh"), Is.Null, "a factory only knows the classes of its own assembly");
+            await Assert.That(testFactory).IsNotNull();
+            await Assert.That(testFactory!.Create("Datamodel_Tests", "SchemaTestElement")).IsTypeOf<SchemaTestElement>();
+            await Assert.That(testFactory.Create("Tests.VMAP", "CMapMesh")).IsNull().Because("a factory only knows the classes of its own assembly");
         }
 
         [Test]
-        public void Schema_ListsPropertiesBaseClassFirstWithAttributeNames()
+        public async Task Schema_ListsPropertiesBaseClassFirstWithAttributeNames()
         {
             var schema = ElementSchema.For(typeof(CMapMesh));
 
-            Assert.That(schema, Is.Not.SameAs(ElementSchema.Empty));
-            Assert.That(schema.ClassName, Is.EqualTo("CMapMesh"));
-            Assert.That(schema.ElementType, Is.EqualTo(typeof(CMapMesh)));
+            await Assert.That(schema).IsNotSameReferenceAs(ElementSchema.Empty);
+            await Assert.That(schema.ClassName).IsEqualTo("CMapMesh");
+            await Assert.That(schema.ElementType).IsEqualTo(typeof(CMapMesh));
 
             // MapNode's properties come before CMapMesh's own, camelCased by the naming convention
             var names = schema.Properties.Select(property => property.AttributeName).ToList();
-            Assert.That(names[0], Is.EqualTo("origin"));
-            Assert.That(names.IndexOf("children"), Is.LessThan(names.IndexOf("disableShadows")));
-            Assert.That(schema.GetProperty("disableShadows")!.PropertyType, Is.EqualTo(typeof(int)));
+            await Assert.That(names[0]).IsEqualTo("origin");
+            await Assert.That(names.IndexOf("children")).IsLessThan(names.IndexOf("disableShadows"));
+            await Assert.That(schema.GetProperty("disableShadows")!.PropertyType).IsEqualTo(typeof(int));
 
             // a DMProperty name replaces the convention
             var root = ElementSchema.For(typeof(CMapRootElement));
-            Assert.That(root.GetProperty("visbility")!.PropertyName, Is.EqualTo("Visibility"));
-            Assert.That(root.GetProperty("Visibility"), Is.Null);
+            await Assert.That(root.GetProperty("visbility")!.PropertyName).IsEqualTo("Visibility");
+            await Assert.That(root.GetProperty("Visibility")).IsNull();
 
-            Assert.That(ElementSchema.For(typeof(Element)), Is.SameAs(ElementSchema.Empty));
+            await Assert.That(ElementSchema.For(typeof(Element))).IsSameReferenceAs(ElementSchema.Empty);
         }
 
         [Test]
-        public void Schema_AppliesTheNamingConventionsAtBuildTime()
+        public async Task Schema_AppliesTheNamingConventionsAtBuildTime()
         {
             // the generator computes these with the same rules the attributes apply at run time
             var names = ElementSchema.For(typeof(HungarianTestElement)).Properties.Select(property => property.AttributeName).ToList();
-            Assert.That(names, Is.EqualTo(new[] { "m_nCount", "m_flScale", "m_bVisible", "m_vOrigin", "m_matTransform", "m_name2" }));
+            await Assert.That(names).IsEquivalentTo(["m_nCount", "m_flScale", "m_bVisible", "m_vOrigin", "m_matTransform", "m_name2"], CollectionOrdering.Matching);
 
             var convention = new HungarianPropertiesAttribute();
-            Assert.That(convention.GetAttributeName("Count", typeof(int)), Is.EqualTo("m_nCount"));
-            Assert.That(convention.GetAttributeName("Name2", typeof(string)), Is.EqualTo("m_name2"));
+            await Assert.That(convention.GetAttributeName("Count", typeof(int))).IsEqualTo("m_nCount");
+            await Assert.That(convention.GetAttributeName("Name2", typeof(string))).IsEqualTo("m_name2");
         }
 
         [Test]
-        public void Schema_AssignsEveryPropertyShape()
+        public async Task Schema_AssignsEveryPropertyShape()
         {
             var element = new SchemaTestElement();
 
-            Assert.That(element.ClassName, Is.EqualTo("SchemaTestElement"));
-            Assert.That(element.Schema.Properties.Select(property => property.AttributeName),
-                Is.EqualTo(new[] { "initOnly", "privateSet", "readOnlyArray", "custom", "renamed" }));
+            await Assert.That(element.ClassName).IsEqualTo("SchemaTestElement");
+            await Assert.That(element.Schema.Properties.Select(property => property.AttributeName))
+                .IsEquivalentTo(["initOnly", "privateSet", "readOnlyArray", "custom", "renamed"], CollectionOrdering.Matching);
 
             element["initOnly"] = 5;
             element["privateSet"] = "set through the private setter";
@@ -124,38 +124,38 @@ namespace Datamodel_Tests
             element["custom"] = 4;
             element["renamed"] = true;
 
-            Assert.That(element.InitOnly, Is.EqualTo(5));
-            Assert.That(element.PrivateSet, Is.EqualTo("set through the private setter"));
-            Assert.That(element.ReadOnlyArray, Is.EqualTo(new[] { 1, 2, 3 }));
-            Assert.That(element.Custom, Is.EqualTo(8), "the init accessor's own logic runs");
-            Assert.That(element.Renamed, Is.True);
+            await Assert.That(element.InitOnly).IsEqualTo(5);
+            await Assert.That(element.PrivateSet).IsEqualTo("set through the private setter");
+            await Assert.That(element.ReadOnlyArray).IsEquivalentTo([1, 2, 3], CollectionOrdering.Matching);
+            await Assert.That(element.Custom).IsEqualTo(8).Because("the init accessor's own logic runs");
+            await Assert.That(element.Renamed).IsTrue();
 
             // the values read back through the indexer and are all written, nothing lands in the plain attribute list
-            Assert.That(element["custom"], Is.EqualTo(8));
-            Assert.That(element.Count, Is.Zero);
-            Assert.That(element.GetAllAttributesForSerialization().Select(attr => attr.Key),
-                Is.EqualTo(new[] { "initOnly", "privateSet", "readOnlyArray", "custom", "renamed" }));
+            await Assert.That(element["custom"]).IsEqualTo(8);
+            await Assert.That(element.Count).IsZero();
+            await Assert.That(element.GetAllAttributesForSerialization().Select(attr => attr.Key))
+                .IsEquivalentTo(["initOnly", "privateSet", "readOnlyArray", "custom", "renamed"], CollectionOrdering.Matching);
 
             // a read-only array can only be filled while empty
             Assert.Throws<InvalidOperationException>(() => element["readOnlyArray"] = new IntArray([4]));
         }
 
         [Test]
-        public void Load_UsesTheNamespaceOfTheRootTypeUnlessToldOtherwise()
+        public async Task Load_UsesTheNamespaceOfTheRootTypeUnlessToldOtherwise()
         {
             using var typed = DM.Load<CMapRootElement>(Resource("roundtrip_test.vmap"));
-            Assert.That(typed.Root, Is.InstanceOf<CMapRootElement>());
+            await Assert.That(typed.Root).IsTypeOf<CMapRootElement>();
 
             using var explicitNamespace = DM.Load<CMapRootElement>(Resource("roundtrip_test.vmap"), new LoadOptions { Namespace = "Tests.VMAP" });
-            Assert.That(explicitNamespace.Root, Is.InstanceOf<CMapRootElement>());
+            await Assert.That(explicitNamespace.Root).IsTypeOf<CMapRootElement>();
 
             // no class of the namespace matches, so the root stays a plain Element and cannot be the requested type
             var exception = Assert.Throws<InvalidDataException>(() => DM.Load<CMapRootElement>(Resource("roundtrip_test.vmap"), new LoadOptions { Namespace = "Nowhere" }));
-            Assert.That(exception!.Message, Does.Contain("CMapRootElement"));
+            await Assert.That(exception.Message).Contains("CMapRootElement");
 
             using var untyped = DM.Load(Resource("roundtrip_test.vmap"), DeferredMode.Disabled);
-            Assert.That(untyped.Root!.GetType(), Is.EqualTo(typeof(Element)));
-            Assert.That(untyped.AllElements.All(element => element.GetType() == typeof(Element)), Is.True);
+            await Assert.That(untyped.Root!.GetType()).IsEqualTo(typeof(Element));
+            await Assert.That(untyped.AllElements.All(element => element.GetType() == typeof(Element))).IsTrue();
         }
     }
 }

@@ -4,7 +4,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
-using NUnit.Framework;
+using System.Threading.Tasks;
+using TUnit.Assertions.Enums;
 using Datamodel;
 using Tests.VMAP;
 using DM = Datamodel.Datamodel;
@@ -15,14 +16,13 @@ namespace Datamodel_Tests
     /// Loading a file and saving it again must reproduce every element, every attribute and the prefix attributes,
     /// whether the elements were deserialized as plain <see cref="Element"/>s or as typed subclasses.
     /// </summary>
-    [TestFixture]
     public class RoundTripTests
     {
-        static string Resource(string name) => Path.Combine(TestContext.CurrentContext.TestDirectory, "Resources", name);
+        static string Resource(string name) => Path.Combine(TestContext.TestDirectory!, "Resources", name);
 
         // a map made for this purpose: every node class, all selection set kinds, nested prefabs and instances,
         // subdivision, vertex paint, baked lighting, a thumbnail and asset references in the prefix
-        static readonly string[] VmapFiles =
+        public static IEnumerable<string> VmapFiles() =>
         [
             "roundtrip_test.vmap",
             Path.Combine("prefabs", "roundtrip_test_prefab1.vmap"),
@@ -30,29 +30,31 @@ namespace Datamodel_Tests
             Path.Combine("prefabs", "roundtrip_test_prefab3.vmap"),
         ];
 
-        [Test, TestCaseSource(nameof(VmapFiles))]
-        public void Binary_Untyped(string file)
+        [Test]
+        [MethodDataSource(nameof(VmapFiles))]
+        public async Task Binary_Untyped(string file)
         {
             using var original = DM.Load(Resource(file), Datamodel.Codecs.DeferredMode.Disabled);
             var saved = Save(original);
 
             using var reloaded = DM.Load(saved);
-            AssertEquivalent(original, reloaded, orderSensitive: true);
-            Assert.That(reloaded.PrefixElementId, Is.EqualTo(original.PrefixElementId));
+            await AssertEquivalent(original, reloaded, orderSensitive: true);
+            await Assert.That(reloaded.PrefixElementId).IsEqualTo(original.PrefixElementId);
 
-            Assert.That(Save(reloaded), Is.EqualTo(saved), "saving the reloaded datamodel must reproduce the same bytes");
+            await Assert.That(Save(reloaded)).IsEquivalentTo(saved, CollectionOrdering.Matching).Because("saving the reloaded datamodel must reproduce the same bytes");
         }
 
-        [Test, TestCaseSource(nameof(VmapFiles))]
-        public void Binary_PrefixElementIsNotAnOrphan(string file)
+        [Test]
+        [MethodDataSource(nameof(VmapFiles))]
+        public async Task Binary_PrefixElementIsNotAnOrphan(string file)
         {
             using var dm = DM.Load(Resource(file), Datamodel.Codecs.DeferredMode.Disabled);
 
-            Assert.That(dm.PrefixAttributes.Keys, Does.Contain("map_asset_references"));
+            await Assert.That(dm.PrefixAttributes.Keys).Contains("map_asset_references");
 
             var reachable = new HashSet<Element>();
             Visit(dm.Root);
-            Assert.That(dm.AllElements.Count, Is.EqualTo(reachable.Count), "every element must be reachable from the root");
+            await Assert.That(dm.AllElements.Count).IsEqualTo(reachable.Count).Because("every element must be reachable from the root");
 
             void Visit(Element? element)
             {
@@ -70,26 +72,28 @@ namespace Datamodel_Tests
             }
         }
 
-        [Test, TestCaseSource(nameof(VmapFiles))]
-        public void Binary_Typed(string file)
+        [Test]
+        [MethodDataSource(nameof(VmapFiles))]
+        public async Task Binary_Typed(string file)
         {
             using var original = DM.Load(Resource(file), Datamodel.Codecs.DeferredMode.Disabled);
             using var typed = DM.Load<CMapRootElement>(Resource(file));
 
-            Assert.That(typed.Root, Is.TypeOf<CMapRootElement>());
+            await Assert.That(typed.Root).IsTypeOf<CMapRootElement>();
 
             // typed elements write their class properties first, in declaration order, so only the set of attributes is compared
-            AssertEquivalent(original, typed, orderSensitive: false);
+            await AssertEquivalent(original, typed, orderSensitive: false);
 
             var saved = Save(typed);
             using var reloaded = DM.Load(saved);
-            AssertEquivalent(original, reloaded, orderSensitive: false);
+            await AssertEquivalent(original, reloaded, orderSensitive: false);
 
-            Assert.That(Save(reloaded), Is.EqualTo(saved));
+            await Assert.That(Save(reloaded)).IsEquivalentTo(saved, CollectionOrdering.Matching);
         }
 
-        [Test, TestCaseSource(nameof(VmapFiles))]
-        public void KeyValues2_Untyped(string file)
+        [Test]
+        [MethodDataSource(nameof(VmapFiles))]
+        public async Task KeyValues2_Untyped(string file)
         {
             using var original = DM.Load(Resource(file), Datamodel.Codecs.DeferredMode.Disabled);
 
@@ -98,25 +102,17 @@ namespace Datamodel_Tests
 
             using var reloaded = DM.Load(text.ToArray());
 
-            FloatTolerance = 1e-9;
-            try
-            {
-                AssertEquivalent(original, reloaded, orderSensitive: true);
-            }
-            finally
-            {
-                FloatTolerance = 0;
-            }
-
-            Assert.That(reloaded.PrefixElementId, Is.EqualTo(original.PrefixElementId));
+            // keyvalues2 prints floats with ten decimals, so values that small lose precision in that encoding
+            await AssertEquivalent(original, reloaded, orderSensitive: true, floatTolerance: 1e-9);
+            await Assert.That(reloaded.PrefixElementId).IsEqualTo(original.PrefixElementId);
 
             using var text2 = new MemoryStream();
             reloaded.Save(text2, "keyvalues2", 4);
-            Assert.That(text2.ToArray(), Is.EqualTo(text.ToArray()));
+            await Assert.That(text2.ToArray()).IsEquivalentTo(text.ToArray(), CollectionOrdering.Matching);
         }
 
         [Test]
-        public void KeyValues2_MatchesReferenceLayout()
+        public async Task KeyValues2_MatchesReferenceLayout()
         {
             // tab indentation, one array item per line, inline elements followed by a blank line,
             // elements referenced more than once written after the root, as Valve's serializer lays the text out
@@ -187,11 +183,11 @@ namespace Datamodel_Tests
                 "",
             ]);
 
-            Assert.That(Datamodel.Datamodel.TextEncoding.GetString(text.ToArray()), Is.EqualTo(expected));
+            await Assert.That(Datamodel.Datamodel.TextEncoding.GetString(text.ToArray())).IsEqualTo(expected);
         }
 
         [Test]
-        public void KeyValues2_FloatFormat()
+        public async Task KeyValues2_FloatFormat()
         {
             using var dm = new DM("test", 1);
             dm.Root = new Element(dm, "root");
@@ -203,13 +199,13 @@ namespace Datamodel_Tests
             dm.Save(text, "keyvalues2", 4);
             var lines = Datamodel.Datamodel.TextEncoding.GetString(text.ToArray()).Split('\n');
 
-            Assert.That(lines, Does.Contain("\t\"position\" \"vector3\" \"-270.1130371094 -233.075378418 562.0910644531\""));
-            Assert.That(lines, Does.Contain("\t\"whole\" \"float\" \"40\""));
-            Assert.That(lines, Does.Contain("\t\"negative\" \"float\" \"-1\""));
+            await Assert.That(lines).Contains("\t\"position\" \"vector3\" \"-270.1130371094 -233.075378418 562.0910644531\"");
+            await Assert.That(lines).Contains("\t\"whole\" \"float\" \"40\"");
+            await Assert.That(lines).Contains("\t\"negative\" \"float\" \"-1\"");
         }
 
         [Test]
-        public void Binary_PrefixAttributes()
+        public async Task Binary_PrefixAttributes()
         {
             using var dm = new DM("vmap", 29);
             dm.PrefixAttributes["map_asset_references"] = new StringArray(["a.vmdl", "b.vmat"]);
@@ -220,40 +216,40 @@ namespace Datamodel_Tests
 
             using var reloaded = DM.Load(Save(dm));
 
-            Assert.That((StringArray?)reloaded.PrefixAttributes["map_asset_references"], Is.EqualTo(new[] { "a.vmdl", "b.vmat" }));
-            Assert.That((string?)reloaded.PrefixAttributes["thumbnail_format"], Is.EqualTo("jpg"));
-            Assert.That((byte[]?)reloaded.PrefixAttributes["thumbnail"], Is.EqualTo(new byte[] { 1, 2, 3 }));
-            Assert.That(reloaded.Root!.Get<string>("hello"), Is.EqualTo("world"));
+            await Assert.That((StringArray?)reloaded.PrefixAttributes["map_asset_references"]).IsEquivalentTo(["a.vmdl", "b.vmat"], CollectionOrdering.Matching);
+            await Assert.That((string?)reloaded.PrefixAttributes["thumbnail_format"]).IsEqualTo("jpg");
+            await Assert.That((byte[]?)reloaded.PrefixAttributes["thumbnail"]).IsEquivalentTo(new byte[] { 1, 2, 3 }, CollectionOrdering.Matching);
+            await Assert.That(reloaded.Root!.Get<string>("hello")).IsEqualTo("world");
         }
 
         [Test]
-        public void Typed_PropertyTypeMismatchIsReported()
+        public async Task Typed_PropertyTypeMismatchIsReported()
         {
             using var dm = new DM("vmap", 29);
             var mesh = new CMapMesh();
 
             var exception = Assert.Throws<InvalidDataException>(() => mesh["disableShadows"] = "3");
-            Assert.That(exception!.Message, Does.Contain("disableShadows"));
+            await Assert.That(exception.Message).Contains("disableShadows");
         }
 
         [Test]
-        public void Typed_ConvertsBetweenBoolIntAndFloat()
+        public async Task Typed_ConvertsBetweenBoolIntAndFloat()
         {
             using var dm = new DM("vmap", 29);
             var mesh = new CMapMesh();
 
             // files written by older tools store some int attributes as bool, and Valve's datamodel converts between the scalar types
             mesh["disableShadows"] = true;
-            Assert.That(mesh.DisableShadows, Is.EqualTo(1));
+            await Assert.That(mesh.DisableShadows).IsEqualTo(1);
 
             mesh["renderToCubemaps"] = 0;
-            Assert.That(mesh.RenderToCubemaps, Is.False);
+            await Assert.That(mesh.RenderToCubemaps).IsFalse();
 
             mesh["smoothingAngle"] = 45;
-            Assert.That(mesh.SmoothingAngle, Is.EqualTo(45f));
+            await Assert.That(mesh.SmoothingAngle).IsEqualTo(45f);
 
             mesh["renderAmt"] = 127.9f;
-            Assert.That(mesh.RenderAmount, Is.EqualTo(127));
+            await Assert.That(mesh.RenderAmount).IsEqualTo(127);
         }
 
         static byte[] Save(DM dm)
@@ -263,98 +259,98 @@ namespace Datamodel_Tests
             return ms.ToArray();
         }
 
-        static void AssertEquivalent(DM expected, DM actual, bool orderSensitive)
+        static async Task AssertEquivalent(DM expected, DM actual, bool orderSensitive, double floatTolerance = 0)
         {
-            AssertAttributesEquivalent(expected.PrefixAttributes, actual.PrefixAttributes, "prefix", orderSensitive);
+            await AssertAttributesEquivalent(expected.PrefixAttributes, actual.PrefixAttributes, "prefix", orderSensitive, floatTolerance);
 
             var expectedElements = expected.AllElements.ToDictionary(e => e.ID);
             var actualElements = actual.AllElements.ToDictionary(e => e.ID);
 
-            Assert.That(actualElements.Keys, Is.EquivalentTo(expectedElements.Keys), "element ids");
-            Assert.That(actual.Root?.ID, Is.EqualTo(expected.Root?.ID), "root");
+            await Assert.That(actualElements.Keys).IsEquivalentTo(expectedElements.Keys).Because("element ids");
+            await Assert.That(actual.Root?.ID).IsEqualTo(expected.Root?.ID).Because("root");
 
             foreach (var (id, expectedElement) in expectedElements)
             {
                 var actualElement = actualElements[id];
-                Assert.That(actualElement.ClassName, Is.EqualTo(expectedElement.ClassName), $"class of {id}");
-                Assert.That(actualElement.Name, Is.EqualTo(expectedElement.Name), $"name of {id}");
-                Assert.That(actualElement.Stub, Is.EqualTo(expectedElement.Stub), $"stub of {id}");
+                await Assert.That(actualElement.ClassName).IsEqualTo(expectedElement.ClassName).Because($"class of {id}");
+                await Assert.That(actualElement.Name).IsEqualTo(expectedElement.Name).Because($"name of {id}");
+                await Assert.That(actualElement.Stub).IsEqualTo(expectedElement.Stub).Because($"stub of {id}");
 
                 if (!expectedElement.Stub)
                 {
-                    AssertAttributesEquivalent(expectedElement, actualElement, $"{expectedElement.ClassName} {id}", orderSensitive);
+                    await AssertAttributesEquivalent(expectedElement, actualElement, $"{expectedElement.ClassName} {id}", orderSensitive, floatTolerance);
                 }
             }
         }
 
-        static void AssertAttributesEquivalent(AttributeList expected, AttributeList actual, string context, bool orderSensitive)
+        static async Task AssertAttributesEquivalent(AttributeList expected, AttributeList actual, string context, bool orderSensitive, double floatTolerance)
         {
             var expectedAttributes = expected.GetAllAttributesForSerialization().ToArray();
             var actualAttributes = actual.GetAllAttributesForSerialization().ToArray();
 
-            var expectedNames = expectedAttributes.Select(a => a.Key);
-            var actualNames = actualAttributes.Select(a => a.Key);
+            var expectedNames = expectedAttributes.Select(a => a.Key).ToArray();
+            var actualNames = actualAttributes.Select(a => a.Key).ToArray();
 
             if (orderSensitive)
             {
-                Assert.That(actualNames, Is.EqualTo(expectedNames), $"attribute names and order of {context}");
+                await Assert.That(actualNames).IsEquivalentTo(expectedNames, CollectionOrdering.Matching).Because($"attribute names and order of {context}");
             }
             else
             {
                 // a typed element also writes class properties the source lacked, with their default values, like the real datamodel does
-                Assert.That(actualNames, Is.SupersetOf(expectedNames), $"attribute names of {context}");
+                await Assert.That(expectedNames.Except(actualNames)).IsEmpty().Because($"attribute names of {context}");
             }
 
             var actualByName = actualAttributes.ToDictionary(a => a.Key, a => a.Value);
 
             foreach (var (name, expectedValue) in expectedAttributes)
             {
-                AssertValueEquivalent(expectedValue, actualByName[name], $"{context}.{name}");
+                await AssertValueEquivalent(expectedValue, actualByName[name], $"{context}.{name}", floatTolerance);
             }
         }
 
-        static void AssertValueEquivalent(object? expected, object? actual, string context)
+        static async Task AssertValueEquivalent(object? expected, object? actual, string context, double floatTolerance)
         {
             if (expected is null || actual is null)
             {
-                Assert.That(actual, Is.EqualTo(expected), context);
+                await Assert.That(actual).IsEqualTo(expected).Because(context);
                 return;
             }
 
             switch (expected)
             {
                 case Element expectedElement:
-                    Assert.That(actual, Is.InstanceOf<Element>(), $"type of {context}");
-                    Assert.That(((Element)actual).ID, Is.EqualTo(expectedElement.ID), context);
+                    await Assert.That(actual).IsAssignableTo<Element>().Because($"type of {context}");
+                    await Assert.That(((Element)actual).ID).IsEqualTo(expectedElement.ID).Because(context);
                     break;
                 case byte[] expectedBytes:
-                    Assert.That(actual, Is.EqualTo(expectedBytes), context);
+                    await Assert.That((byte[])actual).IsEquivalentTo(expectedBytes, CollectionOrdering.Matching).Because(context);
                     break;
                 case IList expectedList:
-                    Assert.That(actual.GetType(), Is.EqualTo(expected.GetType()), $"type of {context}");
+                    await Assert.That(actual.GetType()).IsEqualTo(expected.GetType()).Because($"type of {context}");
                     var actualList = (IList)actual;
-                    Assert.That(actualList.Count, Is.EqualTo(expectedList.Count), $"count of {context}");
+                    await Assert.That(actualList.Count).IsEqualTo(expectedList.Count).Because($"count of {context}");
                     for (var i = 0; i < expectedList.Count; i++)
                     {
-                        AssertValueEquivalent(expectedList[i], actualList[i], $"{context}[{i}]");
+                        await AssertValueEquivalent(expectedList[i], actualList[i], $"{context}[{i}]", floatTolerance);
                     }
                     break;
                 default:
-                    Assert.That(actual.GetType(), Is.EqualTo(expected.GetType()), $"type of {context}");
+                    await Assert.That(actual.GetType()).IsEqualTo(expected.GetType()).Because($"type of {context}");
 
-                    if (FloatTolerance > 0 && TryGetComponents(expected, out var expectedComponents) && TryGetComponents(actual, out var actualComponents))
+                    if (floatTolerance > 0 && TryGetComponents(expected, out var expectedComponents) && TryGetComponents(actual, out var actualComponents))
                     {
-                        Assert.That(actualComponents, Is.EqualTo(expectedComponents).Within(FloatTolerance), context);
+                        for (var i = 0; i < expectedComponents.Length; i++)
+                        {
+                            await Assert.That((double)actualComponents[i]).IsEqualTo(expectedComponents[i]).Within(floatTolerance).Because($"{context} component {i}");
+                        }
                         break;
                     }
 
-                    Assert.That(actual, Is.EqualTo(expected), context);
+                    await Assert.That(actual).IsEqualTo(expected).Because(context);
                     break;
             }
         }
-
-        // keyvalues2 prints floats with ten decimals, so values that small lose precision in that encoding
-        static double FloatTolerance;
 
         static bool TryGetComponents(object value, out float[] components)
         {
