@@ -33,6 +33,9 @@ namespace Datamodel_Tests
 
         [DMProperty("renamed")]
         public bool Renamed { get; set; }
+
+        [DMIgnore]
+        public int Ignored { get; set; }
     }
 
     /// <summary>
@@ -83,9 +86,9 @@ namespace Datamodel_Tests
             await Assert.That(schema.ClassName).IsEqualTo("CMapMesh");
             await Assert.That(schema.ElementType).IsEqualTo(typeof(CMapMesh));
 
-            // MapNode's properties come before CMapMesh's own, camelCased by the naming convention
+            // CMapNode's properties come before CMapMesh's own, camelCased by the naming convention; nodeID is CMapNode's first
             var names = schema.Properties.Select(property => property.AttributeName).ToList();
-            await Assert.That(names[0]).IsEqualTo("origin");
+            await Assert.That(names[0]).IsEqualTo("nodeID");
             await Assert.That(names.IndexOf("children")).IsLessThan(names.IndexOf("disableShadows"));
             await Assert.That(schema.GetProperty("disableShadows")!.PropertyType).IsEqualTo(typeof(int));
 
@@ -123,6 +126,7 @@ namespace Datamodel_Tests
             element["readOnlyArray"] = new IntArray([1, 2, 3]);
             element["custom"] = 4;
             element["renamed"] = true;
+            element.Ignored = 7;
 
             await Assert.That(element.InitOnly).IsEqualTo(5);
             await Assert.That(element.PrivateSet).IsEqualTo("set through the private setter");
@@ -135,6 +139,12 @@ namespace Datamodel_Tests
             await Assert.That(element.Count).IsZero();
             await Assert.That(element.GetAllAttributesForSerialization().Select(attr => attr.Key))
                 .IsEquivalentTo(["initOnly", "privateSet", "readOnlyArray", "custom", "renamed"], CollectionOrdering.Matching);
+
+            // an ignored property is not an attribute: it is not written, and a file attribute of that name stays a plain attribute
+            await Assert.That(element.Schema.GetProperty("ignored")).IsNull();
+            element["ignored"] = 1;
+            await Assert.That(element.Ignored).IsEqualTo(7);
+            await Assert.That(element.Count).IsEqualTo(1);
 
             // a read-only array can only be filled while empty
             Assert.Throws<InvalidOperationException>(() => element["readOnlyArray"] = new IntArray([4]));

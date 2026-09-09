@@ -2,19 +2,10 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Numerics;
-using System.Diagnostics.CodeAnalysis;
 using Datamodel.Format;
 using DMElement = Datamodel.Element;
 
 namespace Tests.VMAP;
-
-/// <summary>
-/// Shared justification for helpers that must be methods: every public property of an element class is written to the file as an attribute.
-/// </summary>
-internal static class ValveMapSchema
-{
-    public const string SerializedPropertiesJustification = "Public properties of an element are serialized as attributes";
-}
 
 /// <summary>
 ///  Valve Map (VMAP) format version 29.
@@ -41,26 +32,6 @@ public class CMapRootElement : DMElement
     /// Map format version.
     /// </summary>
     public int EditorVersion { get; set; } = 400;
-
-    /// <summary>
-    /// Whether the 2D grid is drawn.
-    /// </summary>
-    public bool ShowGrid { get; set; } = true;
-
-    /// <summary>
-    /// Rotation snap in degrees.
-    /// </summary>
-    public int SnapRotationAngle { get; set; } = 15;
-
-    /// <summary>
-    /// Translation snap in world units.
-    /// </summary>
-    public float GridSpacing { get; set; } = 64;
-
-    /// <summary>
-    /// Whether the 3D grid is drawn.
-    /// </summary>
-    public bool Show3DGrid { get; set; } = true;
 
     /// <summary>
     /// Path to the item file this map uses, if any.
@@ -165,24 +136,24 @@ public class CStoredCameras : DMElement
 /// <summary>
 /// Base of everything that appears in the map tree: a transform, an id, and child nodes.
 /// </summary>
-[CamelCaseProperties]
-public abstract class MapNode : DMElement
+/// <summary>
+/// Anything that belongs to a map document. Binds nothing of its own; Hammer's layer for the undo and listener hooks.
+/// </summary>
+public abstract class CMapAtom : DMElement
 {
-    /// <summary>
-    /// Position of the node, relative to its parent.
-    /// </summary>
-    public Vector3 Origin { get; set; }
+}
 
-    /// <summary>
-    /// Rotation of the node, relative to its parent.
-    /// </summary>
-    public Datamodel.QAngle Angles { get; set; }
+/// <summary>
+/// A map atom with a transform. Hammer stores the transform here as plain members; they reach the file through the
+/// properties <see cref="CMapNode"/>'s attribute table exposes, which is why they are declared there.
+/// </summary>
+public abstract class CMapPoint : CMapAtom
+{
+}
 
-    /// <summary>
-    /// Scale of the node, relative to its parent.
-    /// </summary>
-    public Vector3 Scales { get; set; } = new Vector3(1, 1, 1);
-
+[CamelCaseProperties]
+public abstract class CMapNode : CMapPoint
+{
     /// <summary>
     /// Id of the node within the map, referenced by <see cref="CVisibilityMgr"/> and selection sets.
     /// </summary>
@@ -199,22 +170,6 @@ public abstract class MapNode : DMElement
     public Datamodel.ElementArray Children { get; init; } = [];
 
     /// <summary>
-    /// Whether the node is stripped at compile time.
-    /// </summary>
-    public bool EditorOnly { get; set; }
-
-    /// <summary>
-    /// Whether the node is hidden in Hammer.
-    /// </summary>
-    [DMProperty(name: "force_hidden")]
-    public bool ForceHidden { get; set; }
-
-    /// <summary>
-    /// Whether Hammer refuses to move the node.
-    /// </summary>
-    public bool TransformLocked { get; set; }
-
-    /// <summary>
     /// Entity keys driven by a map variable, parallel to <see cref="VariableNames"/>.
     /// </summary>
     public Datamodel.StringArray VariableTargetKeys { get; init; } = [];
@@ -225,9 +180,40 @@ public abstract class MapNode : DMElement
     public Datamodel.StringArray VariableNames { get; init; } = [];
 
     /// <summary>
+    /// Position of the node, relative to its parent.
+    /// </summary>
+    public Vector3 Origin { get; set; }
+
+    /// <summary>
+    /// Rotation of the node, relative to its parent.
+    /// </summary>
+    public Datamodel.QAngle Angles { get; set; }
+
+    /// <summary>
+    /// Scale of the node, relative to its parent.
+    /// </summary>
+    public Vector3 Scales { get; set; } = new Vector3(1, 1, 1);
+
+    /// <summary>
+    /// Whether Hammer refuses to move the node.
+    /// </summary>
+    public bool TransformLocked { get; set; }
+
+    /// <summary>
     /// Pins the node's transform to another node, a plain "DmElement" holding the properties of <see cref="CMapTransformPin"/>.
     /// </summary>
     public DMElement TransformPin { get; init; } = new CMapTransformPin();
+
+    /// <summary>
+    /// Whether the node is hidden in Hammer.
+    /// </summary>
+    [DMProperty(name: "force_hidden")]
+    public bool ForceHidden { get; set; }
+
+    /// <summary>
+    /// Whether the node is stripped at compile time.
+    /// </summary>
+    public bool EditorOnly { get; set; }
 
     /// <summary>
     /// Name of the custom vis group the node belongs to, empty for none.
@@ -243,7 +229,7 @@ public abstract class MapNode : DMElement
     /// Enumerates the child nodes of the given type, in order.
     /// </summary>
     /// <typeparam name="T">Node class to filter by.</typeparam>
-    public IEnumerable<T> GetChildren<T>() where T : MapNode
+    public IEnumerable<T> GetChildren<T>() where T : CMapNode
     {
         foreach (var child in Children)
         {
@@ -259,23 +245,8 @@ public abstract class MapNode : DMElement
 /// References another map file and places its contents at this node.
 /// </summary>
 [CamelCaseProperties]
-public class CMapPrefab : MapNode
+public class CMapPrefab : CMapInstance
 {
-    /// <summary>
-    /// Output plugs of the prefab, one per entity IO connection.
-    /// </summary>
-    public DmePlugList RelayPlugData { get; init; } = [];
-
-    /// <summary>
-    /// List of <see cref="DmeConnectionData"/> elements, one per entity IO connection.
-    /// </summary>
-    public Datamodel.ElementArray ConnectionsData { get; init; } = [];
-
-    /// <summary>
-    /// The loaded contents of the prefab, null in a saved file.
-    /// </summary>
-    public DMElement? Target { get; init; }
-
     /// <summary>
     /// Map variables of the prefab this node overrides, parallel to <see cref="VariableOverrideValues"/>.
     /// </summary>
@@ -320,27 +291,16 @@ public class CMapPrefab : MapNode
     /// Whether the prefab is spawned at runtime instead of merged at compile time.
     /// </summary>
     public bool LoadAtRuntime { get; set; }
-
-    /// <summary>
-    /// Tint applied to everything in the prefab.
-    /// </summary>
-    public Datamodel.Color TintColor { get; set; } = new Datamodel.Color(255, 255, 255, 255);
-
-    /// <summary>
-    /// Whether the prefab contents are left out of visibility computation.
-    /// </summary>
-    [DMProperty(name: "visexclude")]
-    public bool VisExclude { get; set; }
 }
 
 /// <summary>
 /// Base of every map node that carries entity key values and entity IO.
 /// </summary>
 [CamelCaseProperties]
-public abstract class BaseEntity : MapNode
+public abstract class CMapEntityIONode : CMapNode
 {
     /// <summary>
-    /// Output plugs this entity fires through, one per entity IO connection.
+    /// Output plugs this node fires through, one per entity IO connection.
     /// </summary>
     public DmePlugList RelayPlugData { get; init; } = [];
 
@@ -348,7 +308,14 @@ public abstract class BaseEntity : MapNode
     /// List of <see cref="DmeConnectionData"/> elements, one per entity IO connection.
     /// </summary>
     public Datamodel.ElementArray ConnectionsData { get; init; } = [];
+}
 
+/// <summary>
+/// A map node that carries entity key values, including "classname".
+/// </summary>
+[CamelCaseProperties]
+public abstract class CMapGameDataNode : CMapEntityIONode
+{
     /// <summary>
     /// The entity key values, including "classname".
     /// </summary>
@@ -365,7 +332,7 @@ public abstract class BaseEntity : MapNode
     /// </summary>
     /// <param name="name">Key to set.</param>
     /// <param name="value">Value to set it to.</param>
-    public BaseEntity WithProperty(string name, string value)
+    public CMapGameDataNode WithProperty(string name, string value)
     {
         EntityProperties[name] = value;
         return this;
@@ -375,7 +342,7 @@ public abstract class BaseEntity : MapNode
     /// Sets several entity key values and returns this entity.
     /// </summary>
     /// <param name="properties">Key value pairs to set.</param>
-    public BaseEntity WithProperties(params (string name, string value)[] properties)
+    public CMapGameDataNode WithProperties(params (string name, string value)[] properties)
     {
         foreach (var (name, value) in properties)
         {
@@ -389,7 +356,7 @@ public abstract class BaseEntity : MapNode
     /// Sets the "classname" key value and returns this entity.
     /// </summary>
     /// <param name="className">Entity class name.</param>
-    public BaseEntity WithClassName(string className)
+    public CMapGameDataNode WithClassName(string className)
         => WithProperty("classname", className);
 }
 
@@ -473,7 +440,7 @@ public class EditGameClassProps : DMElement
 /// The world entity.
 /// </summary>
 [CamelCaseProperties]
-public class CMapWorld : BaseEntity
+public class CMapWorld : CMapGameDataNode
 {
     /// <summary>
     /// Next free decal id, handed out as decals are placed.
@@ -503,7 +470,7 @@ public class CMapWorld : BaseEntity
 /// Per node hidden state, as two parallel arrays.
 /// </summary>
 [CamelCaseProperties]
-public class CVisibilityMgr : MapNode
+public class CVisibilityMgr : CMapNode
 {
     /// <summary>
     /// The nodes whose visibility is tracked.
@@ -568,15 +535,15 @@ public class CMapVariableSet : DMElement
     public Datamodel.StringArray VariableTypeParameters { get; init; } = [];
 
     /// <summary>
+    /// Group each variable is shown under, parallel to <see cref="VariableNames"/>.
+    /// </summary>
+    public Datamodel.StringArray VariableGroupNames { get; init; } = [];
+
+    /// <summary>
     /// Groups the choice variables are presented in.
     /// </summary>
     [DMProperty(name: "m_ChoiceGroups")]
     public Datamodel.ElementArray ChoiceGroups { get; init; } = [];
-
-    /// <summary>
-    /// Group each variable is shown under, parallel to <see cref="VariableNames"/>.
-    /// </summary>
-    public Datamodel.StringArray VariableGroupNames { get; init; } = [];
 
     /// <summary>
     /// Display order of the variables and choice groups.
@@ -639,21 +606,21 @@ public class CMapSelectionSet : DMElement
     /// <summary>
     /// The selection data when this set selects whole nodes, otherwise null.
     /// </summary>
-    [SuppressMessage("Design", "CA1024:Use properties where appropriate", Justification = ValveMapSchema.SerializedPropertiesJustification)]
-    public CObjectSelectionSetDataElement? GetObjectSelection() => SelectionSetData as CObjectSelectionSetDataElement;
+    [DMIgnore]
+    public CObjectSelectionSetDataElement? ObjectSelection => SelectionSetData as CObjectSelectionSetDataElement;
 
     /// <summary>
     /// The selection data when this set selects faces, otherwise null.
     /// </summary>
-    [SuppressMessage("Design", "CA1024:Use properties where appropriate", Justification = ValveMapSchema.SerializedPropertiesJustification)]
-    public CFaceSelectionSetDataElement? GetFaceSelection() => SelectionSetData as CFaceSelectionSetDataElement;
+    [DMIgnore]
+    public CFaceSelectionSetDataElement? FaceSelection => SelectionSetData as CFaceSelectionSetDataElement;
 
     /// <summary>
     /// The nodes this set selects.
     /// </summary>
     /// <exception cref="InvalidOperationException">Thrown when this is a face selection set.</exception>
     public Datamodel.ElementArray GetSelectedObjects()
-        => GetObjectSelection()?.SelectedObjects ?? throw new InvalidOperationException($"Selection set '{SelectionSetName}' does not select objects.");
+        => ObjectSelection?.SelectedObjects ?? throw new InvalidOperationException($"Selection set '{SelectionSetName}' does not select objects.");
 
     /// <summary>
     /// Enumerates this set and every set nested under it, depth first.
@@ -710,14 +677,14 @@ public class CObjectSelectionSetDataElement : DMElement
 public class CFaceSelectionSetDataElement : DMElement
 {
     /// <summary>
-    /// The <see cref="CMapMesh"/> nodes that own the selected faces.
-    /// </summary>
-    public Datamodel.ElementArray Meshes { get; init; } = [];
-
-    /// <summary>
     /// Face indices into the meshes of <see cref="Meshes"/>.
     /// </summary>
     public Datamodel.IntArray Faces { get; init; } = [];
+
+    /// <summary>
+    /// The <see cref="CMapMesh"/> nodes that own the selected faces.
+    /// </summary>
+    public Datamodel.ElementArray Meshes { get; init; } = [];
 }
 
 /// <summary>
@@ -758,7 +725,7 @@ public class CVertexSelectionSetDataElement : DMElement
 /// A point or brush entity placed in the map.
 /// </summary>
 [CamelCaseProperties]
-public class CMapEntity : BaseEntity
+public class CMapEntity : CMapGameDataNode
 {
     /// <summary>
     /// Surface normal the entity was dropped onto when it was placed.
@@ -771,11 +738,11 @@ public class CMapEntity : BaseEntity
     public bool IsProceduralEntity { get; set; }
 
     /// <summary>
-    /// Returns the vertex paint data of a prop entity, or null when it has none.
+    /// The vertex paint data of a prop entity, or null when it has none.
     /// Hammer only writes the "extra_vertex_data" attribute on painted props, so it is not a class property.
     /// </summary>
-    [SuppressMessage("Design", "CA1024:Use properties where appropriate", Justification = ValveMapSchema.SerializedPropertiesJustification)]
-    public CDmExtraVertexData? GetExtraVertexData()
+    [DMIgnore]
+    public CDmExtraVertexData? ExtraVertexData
         => TryGetValue("extra_vertex_data", out var value) ? value as CDmExtraVertexData : null;
 }
 
@@ -783,28 +750,12 @@ public class CMapEntity : BaseEntity
 /// Places another map group into the map with its own transform and tint.
 /// </summary>
 [CamelCaseProperties]
-public class CMapInstance : MapNode
+public class CMapInstance : CMapEntityIONode
 {
-    /// <summary>
-    /// Output plugs of the instance, one per entity IO connection.
-    /// </summary>
-    public DmePlugList RelayPlugData { get; init; } = [];
-
-    /// <summary>
-    /// List of <see cref="DmeConnectionData"/> elements, one per entity IO connection.
-    /// </summary>
-    public Datamodel.ElementArray ConnectionsData { get; init; } = [];
-
     /// <summary>
     /// A target <see cref="CMapGroup"/> to instance. With custom tint and transform.
     /// </summary>
     public DMElement? Target { get; init; }
-
-    /// <summary>
-    /// The instanced group, or null when <see cref="Target"/> is unset or not a group.
-    /// </summary>
-    [SuppressMessage("Design", "CA1024:Use properties where appropriate", Justification = ValveMapSchema.SerializedPropertiesJustification)]
-    public CMapGroup? GetTargetGroup() => Target as CMapGroup;
 
     /// <summary>
     /// Tint applied to everything in the instance.
@@ -816,13 +767,19 @@ public class CMapInstance : MapNode
     /// </summary>
     [DMProperty(name: "visexclude")]
     public bool VisExclude { get; set; }
+
+    /// <summary>
+    /// The instanced group, or null when <see cref="Target"/> is unset or not a group.
+    /// </summary>
+    [DMIgnore]
+    public CMapGroup? TargetGroup => Target as CMapGroup;
 }
 
 /// <summary>
 /// Groups child nodes under one selectable node. Also the target of a <see cref="CMapInstance"/>.
 /// </summary>
 [CamelCaseProperties]
-public class CMapGroup : MapNode
+public class CMapGroup : CMapNode
 {
     /// <summary>
     /// How the group deforms its children when it is scaled or sheared.
@@ -846,17 +803,48 @@ public class CMapWorldLayer : CMapGroup
 /// A mesh authored in Hammer, with its render, lighting and physics settings.
 /// </summary>
 [CamelCaseProperties]
-public class CMapMesh : MapNode
+public class CMapMesh : CMapNode
 {
+    /// <summary>
+    /// The geometry itself.
+    /// </summary>
+    public CDmePolygonMesh MeshData { get; init; } = [];
+
+    /// <summary>
+    /// Shadow casting mode, 0 to cast shadows.
+    /// </summary>
+    public int DisableShadows { get; set; }
+
+    /// <summary>
+    /// Whether the mesh takes part in baked lighting.
+    /// </summary>
+    [DMProperty(name: "bakelighting")]
+    public bool BakeLighting { get; set; } = true;
+
     /// <summary>
     /// Cubemap this mesh samples, empty to pick automatically.
     /// </summary>
     public string CubeMapName { get; set; } = string.Empty;
 
     /// <summary>
-    /// Light group this mesh belongs to.
+    /// Whether emissive materials on the mesh light the scene when baking.
     /// </summary>
-    public string LightGroup { get; set; } = string.Empty;
+    public bool EmissiveLightingEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Multiplier on the emissive light the mesh contributes when baking.
+    /// </summary>
+    public float EmissiveLightingBoost { get; set; } = 1f;
+
+    /// <summary>
+    /// Whether the mesh only exists to affect baked lighting and is not rendered.
+    /// </summary>
+    public bool LightingDummy { get; set; }
+
+    /// <summary>
+    /// Whether both sides of the mesh receive baked lighting.
+    /// </summary>
+    public bool BakeLightDoubleSided { get; set; }
 
     /// <summary>
     /// Whether the mesh is left out of visibility computation.
@@ -865,15 +853,27 @@ public class CMapMesh : MapNode
     public bool VisExclude { get; set; }
 
     /// <summary>
+    /// Whether the compiler must not merge this mesh with others.
+    /// </summary>
+    [DMProperty(name: "disablemerging")]
+    public bool DisableMerging { get; set; }
+
+    /// <summary>
     /// Whether the mesh renders in the dynamic pass.
     /// </summary>
     [DMProperty(name: "renderwithdynamic")]
     public bool RenderWithDynamic { get; set; }
 
     /// <summary>
-    /// Whether height displacement is skipped for this mesh.
+    /// Whether the mesh appears in cubemap renders.
     /// </summary>
-    public bool DisableHeightDisplacement { get; set; }
+    public bool RenderToCubemaps { get; set; } = true;
+
+    /// <summary>
+    /// Whether the compiler keeps the vertices as authored instead of optimizing them.
+    /// </summary>
+    [DMProperty(name: "keep_vertices")]
+    public bool KeepVertices { get; set; }
 
     /// <summary>
     /// Distance at which the mesh starts fading out, -1 to never fade.
@@ -888,26 +888,9 @@ public class CMapMesh : MapNode
     public float FadeMaxDist { get; set; }
 
     /// <summary>
-    /// Whether the mesh takes part in baked lighting.
+    /// Whether height displacement is skipped for this mesh.
     /// </summary>
-    [DMProperty(name: "bakelighting")]
-    public bool BakeLighting { get; set; } = true;
-
-    /// <summary>
-    /// Whether light probes are precomputed around the mesh.
-    /// </summary>
-    [DMProperty(name: "precomputelightprobes")]
-    public bool PrecomputeLightProbes { get; set; } = true;
-
-    /// <summary>
-    /// Whether the mesh appears in cubemap renders.
-    /// </summary>
-    public bool RenderToCubemaps { get; set; } = true;
-
-    /// <summary>
-    /// Shadow casting mode, 0 to cast shadows.
-    /// </summary>
-    public int DisableShadows { get; set; }
+    public bool DisableHeightDisplacement { get; set; }
 
     /// <summary>
     /// Angle below which adjacent faces are shaded smooth, in degrees.
@@ -931,6 +914,11 @@ public class CMapMesh : MapNode
     public string PhysicsType { get; set; } = "default";
 
     /// <summary>
+    /// Collision property overriding the one of the materials, empty for none.
+    /// </summary>
+    public string PhysicsCollisionProperty { get; set; } = string.Empty;
+
+    /// <summary>
     /// Collision group of the mesh.
     /// </summary>
     public string PhysicsGroup { get; set; } = string.Empty;
@@ -951,14 +939,14 @@ public class CMapMesh : MapNode
     public string PhysicsInteractsExclude { get; set; } = string.Empty;
 
     /// <summary>
-    /// The geometry itself.
+    /// Detail layers whose geometry is included in this mesh's physics.
     /// </summary>
-    public CDmePolygonMesh MeshData { get; init; } = [];
+    public Datamodel.ElementArray PhysicsIncludedDetailLayers { get; init; } = [];
 
     /// <summary>
-    /// Whether the mesh occludes what is behind it.
+    /// Detail layers whose geometry is left out of this mesh's physics.
     /// </summary>
-    public bool UseAsOccluder { get; set; }
+    public Datamodel.ElementArray PhysicsMissingDetailLayers { get; init; } = [];
 
     /// <summary>
     /// Whether <see cref="PhysicsSimplificationError"/> overrides the default simplification.
@@ -969,53 +957,6 @@ public class CMapMesh : MapNode
     /// Error the physics simplification is allowed to introduce.
     /// </summary>
     public float PhysicsSimplificationError { get; set; }
-
-    /// <summary>
-    /// Whether emissive materials on the mesh light the scene when baking.
-    /// </summary>
-    public bool EmissiveLightingEnabled { get; set; } = true;
-
-    /// <summary>
-    /// Multiplier on the emissive light the mesh contributes when baking.
-    /// </summary>
-    public float EmissiveLightingBoost { get; set; } = 1f;
-
-    /// <summary>
-    /// Whether the mesh only exists to affect baked lighting and is not rendered.
-    /// </summary>
-    public bool LightingDummy { get; set; }
-
-    /// <summary>
-    /// Whether both sides of the mesh receive baked lighting.
-    /// </summary>
-    public bool BakeLightDoubleSided { get; set; }
-
-    /// <summary>
-    /// Whether the compiler must not merge this mesh with others.
-    /// </summary>
-    [DMProperty(name: "disablemerging")]
-    public bool DisableMerging { get; set; }
-
-    /// <summary>
-    /// Whether the compiler keeps the vertices as authored instead of optimizing them.
-    /// </summary>
-    [DMProperty(name: "keep_vertices")]
-    public bool KeepVertices { get; set; }
-
-    /// <summary>
-    /// Collision property overriding the one of the materials, empty for none.
-    /// </summary>
-    public string PhysicsCollisionProperty { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Detail layers whose geometry is included in this mesh's physics.
-    /// </summary>
-    public Datamodel.ElementArray PhysicsIncludedDetailLayers { get; init; } = [];
-
-    /// <summary>
-    /// Detail layers whose geometry is left out of this mesh's physics.
-    /// </summary>
-    public Datamodel.ElementArray PhysicsMissingDetailLayers { get; init; } = [];
 }
 
 /// <summary>
@@ -1201,10 +1142,10 @@ public class CDmePolygonMesh : DMElement
     public CDmePolygonMeshSubdivisionData SubdivisionData { get; init; } = [];
 
     /// <summary>
-    /// Returns the number of faces in the mesh.
+    /// The number of faces in the mesh.
     /// </summary>
-    [SuppressMessage("Design", "CA1024:Use properties where appropriate", Justification = ValveMapSchema.SerializedPropertiesJustification)]
-    public int GetFaceCount() => FaceEdgeIndices.Count;
+    [DMIgnore]
+    public int FaceCount => FaceEdgeIndices.Count;
 
     /// <summary>
     /// Enumerates the half edges around a face, starting at its <see cref="FaceEdgeIndices"/> entry and following <see cref="EdgeNextIndices"/>.
@@ -1519,9 +1460,9 @@ public class CMapCable : CMapPath
 }
 
 /// <summary>
-/// The cordon box, whose transform is the box: <see cref="MapNode.Origin"/> is its centre and <see cref="MapNode.Scales"/> its size.
+/// The cordon box, whose transform is the box: <see cref="CMapNode.Origin"/> is its centre and <see cref="CMapNode.Scales"/> its size.
 /// </summary>
-public class CMapCordon : MapNode
+public class CMapCordon : CMapNode
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="CMapCordon"/> class named as Hammer does.
@@ -1536,7 +1477,7 @@ public class CMapCordon : MapNode
 /// Node holding the navigation mesh generation settings of the map.
 /// </summary>
 [CamelCaseProperties]
-public class CMapNavData : MapNode
+public class CMapNavData : CMapNode
 {
     /// <summary>
     /// The settings.
@@ -1647,13 +1588,8 @@ public class CDmeNavData : DMElement
 /// A smart prop placed in the map, evaluated by Hammer into the props it stands for.
 /// </summary>
 [CamelCaseProperties]
-public class CMapSmartProp : MapNode
+public class CMapSmartProp : CMapNode
 {
-    /// <summary>
-    /// Nodes the smart prop shapes itself around, each wrapped in a plain element with a "value" attribute.
-    /// </summary>
-    public Datamodel.ElementArray ShapeReferences { get; init; } = [];
-
     /// <summary>
     /// Path of the smart prop definition.
     /// </summary>
@@ -1673,6 +1609,11 @@ public class CMapSmartProp : MapNode
     /// Whether the evaluation is constrained to the prefab the smart prop sits in.
     /// </summary>
     public bool ConstrainToPrefab { get; set; }
+
+    /// <summary>
+    /// Nodes the smart prop shapes itself around, each wrapped in a plain element with a "value" attribute.
+    /// </summary>
+    public Datamodel.ElementArray ShapeReferences { get; init; } = [];
 
     /// <summary>
     /// Render alpha, 0 to 255.

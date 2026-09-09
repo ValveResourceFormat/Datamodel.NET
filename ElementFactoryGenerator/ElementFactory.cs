@@ -8,7 +8,7 @@ using System.Text;
 
 /// <summary>
 /// Emits an <c>ElementFactory</c> into every assembly that declares subclasses of <c>Datamodel.Element</c>.
-/// The factory constructs those classes by name and describes their properties, so that Datamodel.NET can load
+/// The factory constructs those classes by name and describes their properties, save those marked <c>[DMIgnore]</c>, so that Datamodel.NET can load
 /// and save typed elements without reflection. It registers itself when the assembly is initialised.
 /// </summary>
 [Generator]
@@ -19,6 +19,7 @@ public class ElementFactoryGenerator : IIncrementalGenerator
 
     static readonly string NamingConventionTypeName = typeof(Datamodel.Format.AttributeNamingConventionAttribute).FullName!;
     static readonly string PropertyAttributeTypeName = typeof(Datamodel.Format.DMProperty).FullName!;
+    static readonly string IgnoreAttributeTypeName = typeof(Datamodel.Format.DMIgnore).FullName!;
 
     private static readonly DiagnosticDescriptor AmbiguousElementClassName = new(
         id: "DMX001",
@@ -346,6 +347,7 @@ public class ElementFactoryGenerator : IIncrementalGenerator
             var accessors = new StringBuilder();
             var properties = type.GetMembers().OfType<IPropertySymbol>()
                 .Where(property => !property.IsStatic && !property.IsIndexer && property.DeclaredAccessibility == Accessibility.Public && property.GetMethod is not null && property.ExplicitInterfaceImplementations.Length == 0)
+                .Where(property => !property.GetAttributes().Any(attr => attr.AttributeClass?.ToDisplayString() == IgnoreAttributeTypeName))
                 .ToList();
 
             if (properties.Count == 0)

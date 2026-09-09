@@ -56,6 +56,7 @@ How the classes are found:
 How a subclass maps onto the file:
 
 * Every public property is an attribute. The attribute name is the property name, adjusted by `[LowercaseProperties]`, `[CamelCaseProperties]` or `[DMProperty]`.
+* A property marked `[DMIgnore]` is not an attribute: it is neither written nor assigned when loading, so a class can expose computed values and typed views of its attributes.
 * Attributes of the file that no property claims are kept as plain attributes and written back unchanged.
 * Every property is always written, like in Valve's datamodel. Loading an older file through a class with newer properties adds those with their default values.
 * Assigning a file attribute to a property of an incompatible type throws an `InvalidDataException` naming the property, which usually means the class does not match the format.

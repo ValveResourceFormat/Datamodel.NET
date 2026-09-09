@@ -55,6 +55,14 @@ public sealed class DMProperty : System.Attribute
 }
 
 /// <summary>
+/// Leaves a public property out of the file: it is neither written as an attribute nor assigned when loading.
+/// </summary>
+[AttributeUsage(AttributeTargets.Property, Inherited = true, AllowMultiple = false)]
+public sealed class DMIgnore : System.Attribute
+{
+}
+
+/// <summary>
 /// The rules behind the naming convention attributes, in one place for the library and the generator.
 /// </summary>
 internal static class NamingConventions
