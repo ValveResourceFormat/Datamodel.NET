@@ -86,9 +86,9 @@ namespace Datamodel_Tests
             await Assert.That(schema.ClassName).IsEqualTo("CMapMesh");
             await Assert.That(schema.ElementType).IsEqualTo(typeof(CMapMesh));
 
-            // CMapNode's properties come before CMapMesh's own, camelCased by the naming convention; nodeID is CMapNode's first
+            // the base classes' properties come before CMapMesh's own, camelCased by the naming convention; origin is CMapPoint's first
             var names = schema.Properties.Select(property => property.AttributeName).ToList();
-            await Assert.That(names[0]).IsEqualTo("nodeID");
+            await Assert.That(names[0]).IsEqualTo("origin");
             await Assert.That(names.IndexOf("children")).IsLessThan(names.IndexOf("disableShadows"));
             await Assert.That(schema.GetProperty("disableShadows")!.PropertyType).IsEqualTo(typeof(int));
 

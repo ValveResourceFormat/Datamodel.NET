@@ -144,11 +144,25 @@ public abstract class CMapAtom : DMElement
 }
 
 /// <summary>
-/// A map atom with a transform. Hammer stores the transform here as plain members; they reach the file through the
-/// properties <see cref="CMapNode"/>'s attribute table exposes, which is why they are declared there.
+/// A map atom with a transform, relative to the parent node.
 /// </summary>
+[CamelCaseProperties]
 public abstract class CMapPoint : CMapAtom
 {
+    /// <summary>
+    /// Position, relative to the parent.
+    /// </summary>
+    public Vector3 Origin { get; set; }
+
+    /// <summary>
+    /// Rotation, relative to the parent.
+    /// </summary>
+    public Datamodel.QAngle Angles { get; set; }
+
+    /// <summary>
+    /// Scale, relative to the parent.
+    /// </summary>
+    public Vector3 Scales { get; set; } = new Vector3(1, 1, 1);
 }
 
 [CamelCaseProperties]
@@ -178,21 +192,6 @@ public abstract class CMapNode : CMapPoint
     /// Map variables driving <see cref="VariableTargetKeys"/>.
     /// </summary>
     public Datamodel.StringArray VariableNames { get; init; } = [];
-
-    /// <summary>
-    /// Position of the node, relative to its parent.
-    /// </summary>
-    public Vector3 Origin { get; set; }
-
-    /// <summary>
-    /// Rotation of the node, relative to its parent.
-    /// </summary>
-    public Datamodel.QAngle Angles { get; set; }
-
-    /// <summary>
-    /// Scale of the node, relative to its parent.
-    /// </summary>
-    public Vector3 Scales { get; set; } = new Vector3(1, 1, 1);
 
     /// <summary>
     /// Whether Hammer refuses to move the node.
