@@ -46,6 +46,15 @@ public class ElementFactoryGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor GenericElementClass = new(
+        id: "DMX004",
+        title: "Generic Datamodel element classes are not supported",
+        messageFormat: "Element class '{0}' is generic, so the generated ElementFactory can neither construct it nor bind its properties, and they are not stored as attributes; declare a non-generic class for each type argument instead",
+        category: "Datamodel",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "The ElementFactory lists closed types only, and Datamodel files identify elements by a plain class name, so each type argument needs its own class.");
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var provider = context.SyntaxProvider.CreateSyntaxProvider(
@@ -78,6 +87,7 @@ public class ElementFactoryGenerator : IIncrementalGenerator
         {
             if (type.IsGenericType || type.ContainingType?.IsGenericType == true)
             {
+                context.ReportDiagnostic(Diagnostic.Create(GenericElementClass, type.Locations.FirstOrDefault() ?? Location.None, type.ToDisplayString()));
                 continue;
             }
 
