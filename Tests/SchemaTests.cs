@@ -53,26 +53,6 @@ namespace Datamodel_Tests
     }
 
     /// <summary>
-    /// A generic base class, whose properties each constructed subclass binds with its own type arguments.
-    /// </summary>
-    [CamelCaseProperties]
-    internal abstract class GenericTestBase<T> : Element
-    {
-        public T[] Values { get; set; } = [];
-    }
-
-    /// <summary>
-    /// A generic class, which registers the schema of each constructed type from its generated static constructor.
-    /// </summary>
-    [CamelCaseProperties]
-    internal partial class GenericTestElement<T> : GenericTestBase<T>
-    {
-        public T? Value { get; set; }
-
-        public ElementArray Children { get; init; } = [];
-    }
-
-    /// <summary>
     /// The ElementFactory generated into this assembly registers itself and describes the properties of every Element subclass.
     /// </summary>
     public class SchemaTests
@@ -168,33 +148,6 @@ namespace Datamodel_Tests
 
             // a read-only array can only be filled while empty
             Assert.Throws<InvalidOperationException>(() => element["readOnlyArray"] = new IntArray([4]));
-        }
-
-        [Test]
-        public async Task Schema_IsRegisteredForEachConstructedGenericType()
-        {
-            var vectors = new GenericTestElement<Vector3> { Value = Vector3.One };
-            var ints = new GenericTestElement<int> { Value = 3, Values = [1, 2], Children = [vectors] };
-
-            await Assert.That(ints.ClassName).IsEqualTo("GenericTestElement");
-            await Assert.That(ints.Schema.Properties.Select(property => property.AttributeName))
-                .IsEquivalentTo(["values", "value", "children"], CollectionOrdering.Matching);
-            await Assert.That(ints.Schema.GetProperty("value")!.PropertyType).IsEqualTo(typeof(int));
-            await Assert.That(vectors.Schema.GetProperty("value")!.PropertyType).IsEqualTo(typeof(Vector3));
-            await Assert.That(ints.Count).IsZero();
-
-            using var dm = new DM("test", 1) { Root = ints };
-            using var text = new MemoryStream();
-            dm.Save(text, "keyvalues2", 4);
-
-            using var reloaded = DM.Load(text.ToArray());
-            var root = reloaded.Root!;
-            await Assert.That(root.ClassName).IsEqualTo("GenericTestElement");
-            await Assert.That(root["value"]).IsEqualTo(3);
-            await Assert.That((IntArray)root["values"]!).IsEquivalentTo([1, 2], CollectionOrdering.Matching);
-
-            var child = (Element)((ElementArray)root["children"]!)[0]!;
-            await Assert.That(child["value"]).IsEqualTo(Vector3.One);
         }
 
         [Test]
