@@ -4,7 +4,7 @@
     <OutputType>Library</OutputType>
     <RootNamespace>Datamodel</RootNamespace>
     <PackageId>KeyValues2</PackageId>
-    <Version>2.0-beta</Version>
+    <Version>2.0-rc2</Version>
 	<Nullable>enable</Nullable>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
