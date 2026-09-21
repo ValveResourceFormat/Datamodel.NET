@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections;
 using System.Collections.Generic;
@@ -147,18 +148,42 @@ namespace Datamodel.Codecs
 
         static string ReadString_Raw(BinaryReader reader)
         {
-            List<byte> raw = [];
-            while (true)
-            {
-                byte cur = reader.ReadByte();
-                if (cur == 0) break;
-                else raw.Add(cur);
-            }
+            // most strings fit on the stack, the pool is only rented from for the ones that do not
+            Span<byte> buffer = stackalloc byte[256];
+            byte[]? rented = null;
 
-            var user_encoding = Datamodel.TextEncoding.GetString(raw.ToArray());
-            if (user_encoding.Contains('�'))
-                return Encoding.Default.GetString(raw.ToArray());
-            else return user_encoding;
+            try
+            {
+                var position = 0;
+
+                while (true)
+                {
+                    var b = reader.ReadByte();
+
+                    if (b == 0)
+                        break;
+
+                    if (position == buffer.Length)
+                    {
+                        var grown = ArrayPool<byte>.Shared.Rent(buffer.Length * 2);
+                        buffer.CopyTo(grown);
+
+                        if (rented != null)
+                            ArrayPool<byte>.Shared.Return(rented);
+
+                        buffer = rented = grown;
+                    }
+
+                    buffer[position++] = b;
+                }
+
+                return Datamodel.TextEncoding.GetString(buffer[..position]);
+            }
+            finally
+            {
+                if (rented != null)
+                    ArrayPool<byte>.Shared.Return(rented);
+            }
         }
 
         class StringDictionary
