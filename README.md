@@ -1,28 +1,46 @@
-Datamodel.NET is a library which implements the Datamodel structure and Datamodel Exchange (DMX) file format.
+<h1 align="center">
+  <img src="https://raw.githubusercontent.com/ValveResourceFormat/Datamodel.NET/master/Misc/logo.png" alt="Logo" width="128">
+  <br>KeyValues2
+</h1>
 
-Datamodel is a strongly-typed generic data structure designed by Valve Corporation. It is primarily used as a developer storage format for meshes, animations, and maps.  
+<p align="center">
+  Read and write Datamodel Exchange (DMX), Valve's strongly typed generic data structure.
+  <br />
+  Used as a developer storage format for meshes, animations, and maps.
+  <br />
+  <a href="https://www.nuget.org/packages/KeyValues2/">NuGet</a>
+  ·
+  <a href="#usage">Usage</a>
+  ·
+  <a href="#typed-elements">Typed elements</a>
+  ·
+  <a href="#attributes">Attributes</a>
+</p>
+
+DMX stores a tree of typed, named attributes, either as text in the `keyvalues2` encoding or as binary. Hammer and Valve's content tools write meshes, animations, and maps in it. Published on NuGet as [KeyValues2](https://www.nuget.org/packages/KeyValues2/), forked from [Artfunkel/Datamodel.NET](https://github.com/Artfunkel/Datamodel.NET).
 
 ## Usage
-```shell
-dotnet add package KeyValues2
-```
 
 ```cs
 using Datamodel;
+using Datamodel.Format;
+
+// The class and its namespace share a name, so alias it to call the static methods
+using DM = Datamodel.Datamodel;
 
 // Load a file with unknown layout
-using var dm = Datamodel.Load("my_file.dmx");
+using var dm = DM.Load("my_file.dmx");
 var element = dm.Root;
 var value = element.Get<string>("my_property");
 
 // Load a file with a known layout
-using var map = Datamodel.Load<CMapRootElement>("fy_pool.vmap");
+using var map = DM.Load<CMapRootElement>("fy_pool.vmap");
 var root = (CMapRootElement)map.Root;
 Debug.Assert(root.IsPrefab == false);
 
 // Layout definition
 // Full implementation can be found here:
-// https://github.com/ValveResourceFormat/Datamodel.NET/blob/master/Tests/ValveMap.cs
+// https://github.com/ValveResourceFormat/Datamodel.NET/blob/master/Tests.VMAP/ValveMap.cs
 [LowercaseProperties]
 class CMapRootElement : Element
 {
@@ -64,7 +82,7 @@ How a subclass maps onto the file:
 
 ## Serialization
 
-```c#
+```cs
 var HelloWorld = new Datamodel.Datamodel("helloworld", 1); // must provide a format name (can be anything) and version
 
 HelloWorld.Root = new Datamodel.Element(HelloWorld, "my_root");
@@ -75,8 +93,8 @@ var MyString = HelloWorld.Root.Get<string>("Hello");
 HelloWorld.Save("hello world.dmx", "keyvalues2", 1); // must provide an encoding name and version
 ```
 
-```vdf
-<--! dmx encoding keyvalues2 1 format helloworld 1>
+```xml
+<!-- dmx encoding keyvalues2 1 format helloworld 1 -->
 {
     "Hello" "string" "World"
 }

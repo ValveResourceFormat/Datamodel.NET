@@ -8,6 +8,7 @@
 	<Nullable>enable</Nullable>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>logo.png</PackageIcon>
     <Authors>Tom Edwards, ValveResourceFormat contributors</Authors>
     <Copyright>Copyright (c) 2013 Tom Edwards and ValveResourceFormat contributors</Copyright>
     <Description>Implements Valve's Datamodel Exchange (DMX) file format.</Description>
@@ -40,6 +41,7 @@
   </PropertyGroup>
   <ItemGroup>
     <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\Misc\logo.png" Pack="true" PackagePath="\" />
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="DmxPad\**" />
