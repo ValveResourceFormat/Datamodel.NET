@@ -27,7 +27,6 @@ namespace Datamodel
         int offset;
         int count;
         int capacity;
-        bool shared;
 
         public virtual AttributeList? Owner
         {
@@ -67,7 +66,6 @@ namespace Datamodel
             this.offset = offset;
             this.count = count;
             capacity = count;
-            shared = true;
         }
 
         /// <summary>
@@ -91,7 +89,6 @@ namespace Datamodel
             buffer = newBuffer;
             offset = 0;
             capacity = newCapacity;
-            shared = false;
         }
 
         public int IndexOf(T item)
