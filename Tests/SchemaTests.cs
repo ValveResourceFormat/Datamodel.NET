@@ -44,7 +44,7 @@ namespace Datamodel_Tests
     [HungarianProperties]
     internal class HungarianTestElement : Element
     {
-        public int Count { get; set; }
+        public new int Count { get; set; }
         public float Scale { get; set; }
         public bool Visible { get; set; }
         public Vector3 Origin { get; set; }

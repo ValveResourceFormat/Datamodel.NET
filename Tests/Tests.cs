@@ -34,10 +34,15 @@ namespace Datamodel_Tests
         protected FileStream Binary_4_File = File.OpenRead(TestContext.TestDirectory + "/Resources/binary4.dmx");
         protected FileStream KeyValues2_1_File = File.OpenRead(TestContext.TestDirectory + "/Resources/taunt05.dmx");
 
-        /// <summary>dmxconvert.exe of any installed Source 2 game, used to validate what the library writes. Null when no game is installed.</summary>
+        /// <summary>
+        /// dmxconvert.exe of an installed Source 2 game, used to validate what the library writes. Null when no game is installed.
+        /// The most recently updated one is used, as older games reject newer format versions.
+        /// </summary>
         static readonly string? DmxConvertExe = GameFolderLocator.FindAllSteamGames()
             .Select(game => Path.Combine(game.GamePath, "game", "bin", "win64", "dmxconvert.exe"))
-            .FirstOrDefault(File.Exists);
+            .Where(File.Exists)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
         static readonly bool DmxConvertExe_Exists = DmxConvertExe != null;
 
         static DatamodelTests()
@@ -46,7 +51,7 @@ namespace Datamodel_Tests
             Random.Shared.NextBytes(binary);
             var quat = Quaternion.Normalize(new Quaternion(1, 2, 3, 4)); // dmxconvert will normalise this if I don't!
 
-            TestValues_V1 = new List<object> {
+            TestValues_V1 = new List<object?> {
                 "hello_world",
                 1,
                 1.5f,
@@ -64,7 +69,7 @@ namespace Datamodel_Tests
             TestValues_V2 = TestValues_V1.ToList();
             TestValues_V2.Add(TimeSpan.FromMinutes(5) + TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond / 2));
 
-            TestValues_V3 = TestValues_V1.Concat(new object[] {
+            TestValues_V3 = TestValues_V1.Concat(new object?[] {
                 (byte)0xFF,
                 (UInt64)0xFFFFFFFF,
                 //new QAngle(0, 90, 180)
@@ -148,12 +153,12 @@ namespace Datamodel_Tests
             });
         }
 
-        protected static List<object> TestValues_V1 { get; }
-        protected static List<object> TestValues_V2 { get; }
-        protected static List<object> TestValues_V3 { get; }
+        protected static List<object?> TestValues_V1 { get; }
+        protected static List<object?> TestValues_V2 { get; }
+        protected static List<object?> TestValues_V3 { get; }
         protected static Guid RootGuid { get; } = Guid.NewGuid();
 
-        protected static List<object> AttributeValuesFor(string encoding_name, int encoding_version)
+        protected static List<object?> AttributeValuesFor(string encoding_name, int encoding_version)
         {
             if (encoding_name == "keyvalues2")
             {
@@ -185,7 +190,7 @@ namespace Datamodel_Tests
                 await Assert.That(dm.Root[name]).IsEqualTo(value); // value types are stored inline, so the box read back is a new one
 
                 name += " array";
-                var list = value.GetType().MakeListType().GetConstructor(Type.EmptyTypes).Invoke(null) as IList;
+                var list = (IList)value.GetType().MakeListType().GetConstructor(Type.EmptyTypes)!.Invoke(null);
                 list.Add(value);
                 list.Add(value);
                 dm.Root[name] = list;
@@ -201,14 +206,14 @@ namespace Datamodel_Tests
         protected static async Task ValidatePopulated(string encoding_name, int encoding_version)
         {
             var dm = DM.Load(DmxConvertPath);
-            await Assert.That(dm.Root.ID).IsEqualTo(RootGuid);
+            await Assert.That(dm.Root!.ID).IsEqualTo(RootGuid);
             foreach (var value in AttributeValuesFor(encoding_name, encoding_version))
             {
                 if (value == null) continue;
                 var name = value.GetType().Name;
 
                 if (value is ICollection collection)
-                    await Assert.That(((ICollection)dm.Root[name]).Cast<object>()).IsEquivalentTo(collection.Cast<object>(), CollectionOrdering.Matching).Because(name);
+                    await Assert.That(((ICollection)dm.Root[name]!).Cast<object>()).IsEquivalentTo(collection.Cast<object>(), CollectionOrdering.Matching).Because(name);
                 else if (value is Color color)
                     await Assert.That(dm.Root.Get<Color>(name)).IsEqualTo(color);
                 else if (value is Quaternion quat)
@@ -231,7 +236,7 @@ namespace Datamodel_Tests
             var dm = MakeDatamodel();
             await Populate(dm, encoding, version);
 
-            dm.Root["Arr"] = new System.Collections.ObjectModel.ObservableCollection<int>();
+            dm.Root!["Arr"] = new System.Collections.ObjectModel.ObservableCollection<int>();
             dm.Root.GetArray<int>("Arr");
 
             if (memory_save)
@@ -246,8 +251,8 @@ namespace Datamodel_Tests
                 Cleanup();
             }
 
-            dm.AllElements.Remove(dm.Root.GetArray<Element>("ElemArray")[3], DM.ElementList.RemoveMode.MakeStubs);
-            await Assert.That(dm.Root.GetArray<Element>("ElemArray")[3].Stub).IsTrue();
+            dm.AllElements.Remove(dm.Root.GetArray<Element>("ElemArray")![3], DM.ElementList.RemoveMode.MakeStubs);
+            await Assert.That(dm.Root.GetArray<Element>("ElemArray")![3].Stub).IsTrue();
 
             dm.AllElements.Remove(dm.Root, DM.ElementList.RemoveMode.MakeStubs);
             await Assert.That(dm.Root.Stub).IsTrue();
@@ -274,7 +279,7 @@ namespace Datamodel_Tests
             await Assert.That(element.Equals(otherId)).IsFalse();
             await Assert.That(element.Equals((object)otherId)).IsFalse();
             await Assert.That(element.Equals(null)).IsFalse();
-            await Assert.That(element.Equals("not an element")).IsFalse();
+            await Assert.That(element!.Equals("not an element")).IsFalse();
 
             var set = new HashSet<Element> { element };
             await Assert.That(set.Contains(sameId)).IsTrue();
@@ -315,10 +320,10 @@ namespace Datamodel_Tests
 
                 using var loaded = DM.Load(stream);
                 await Assert.That(loaded.AllElements.Count).IsEqualTo(3).Because(encoding);
-                await Assert.That(loaded.Root.Get<Element>("first").ID).IsEqualTo(a).Because(encoding);
-                await Assert.That(loaded.Root.Get<Element>("second").ID).IsEqualTo(b).Because(encoding);
-                await Assert.That(loaded.Root.Get<Element>("first").Name).IsEqualTo("first").Because(encoding);
-                await Assert.That(loaded.Root.Get<Element>("second").Name).IsEqualTo("second").Because(encoding);
+                await Assert.That(loaded.Root!.Get<Element>("first")!.ID).IsEqualTo(a).Because(encoding);
+                await Assert.That(loaded.Root.Get<Element>("second")!.ID).IsEqualTo(b).Because(encoding);
+                await Assert.That(loaded.Root.Get<Element>("first")!.Name).IsEqualTo("first").Because(encoding);
+                await Assert.That(loaded.Root.Get<Element>("second")!.Name).IsEqualTo("second").Because(encoding);
             }
         }
 
@@ -334,7 +339,7 @@ namespace Datamodel_Tests
             await Assert.That(array.Remove(elementB)).IsFalse();
             await Assert.That(array.Remove(elementA)).IsFalse();
 
-            dm.Root["a"] = array;
+            dm.Root!["a"] = array;
 
             await Assert.That(array.Remove(elementB)).IsFalse();
             await Assert.That(array.Remove(elementA)).IsFalse();
@@ -361,7 +366,7 @@ namespace Datamodel_Tests
 
         private static async Task Validate_Vmap_Reflection(Datamodel.Datamodel unserialisedVmap)
         {
-            await Assert.That(unserialisedVmap.Root.GetType()).IsEqualTo(typeof(CMapRootElement));
+            await Assert.That(unserialisedVmap.Root!.GetType()).IsEqualTo(typeof(CMapRootElement));
 
             CMapRootElement root = (CMapRootElement)unserialisedVmap.Root;
 
@@ -623,7 +628,7 @@ namespace Datamodel_Tests
 
         void Get_TF2(Datamodel.Datamodel dm)
         {
-            dm.Root.Get<Element>("skeleton").GetArray<Element>("children")[0].Any();
+            dm.Root!.Get<Element>("skeleton")!.GetArray<Element>("children")![0].Any();
             dm.FormatVersion = 22; // otherwise recent versions of dmxconvert fail
         }
 
@@ -632,7 +637,7 @@ namespace Datamodel_Tests
         {
             var dm = DM.Load<Element>(Binary_9_File);
             PrintContents(dm);
-            dm.Root.Get<Element>("skeleton").GetArray<Element>("children")[0].Any();
+            dm.Root!.Get<Element>("skeleton")!.GetArray<Element>("children")![0].Any();
             await SaveAndConvert(dm, "binary", 9);
 
             Cleanup();
@@ -697,7 +702,7 @@ namespace Datamodel_Tests
             await Populate(dm, "binary", 9);
 
             var dm2 = MakeDatamodel();
-            dm2.Root = dm2.ImportElement(dm.Root, DM.ImportRecursionMode.Recursive, DM.ImportOverwriteMode.All);
+            dm2.Root = dm2.ImportElement(dm.Root!, DM.ImportRecursionMode.Recursive, DM.ImportOverwriteMode.All);
 
             await SaveAndConvert(dm, "keyvalues2", 4);
             await SaveAndConvert(dm, "binary", 9);
