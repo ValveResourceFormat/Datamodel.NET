@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="Datamodel.NET/Datamodel.NET.csproj" />
+  <Project Path="ElementFactoryGenerator/ElementFactoryGenerator.csproj" />
+  <Project Path="Tests/Tests.csproj" />
+  <Project Path="Tests.VMAP/Tests.VMAP.csproj" />
+  <Project Path="Benchmarks/Benchmarks.csproj" />
+</Solution>
