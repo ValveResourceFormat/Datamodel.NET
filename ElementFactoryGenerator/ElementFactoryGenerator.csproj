@@ -1,22 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-	<!-- Ships inside the KeyValues2 package, under analyzers/dotnet/cs, so it is not packed on its own and shares the library's version. -->
-	<PropertyGroup>
-		<TargetFramework>netstandard2.0</TargetFramework>
-		<LangVersion>latest</LangVersion>
-		<Nullable>enable</Nullable>
-		<IsRoslynComponent>true</IsRoslynComponent>
-		<IsPackable>false</IsPackable>
-	</PropertyGroup>
+  <!-- Ships inside the KeyValues2 package, under analyzers/dotnet/cs, so it is not packed on its own and shares the library's version. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <AnalysisMode>All</AnalysisMode>
+    <!-- the linked Format.cs keeps its public attribute names -->
+    <NoWarn>CA1710</NoWarn>
+  </PropertyGroup>
 
-	<ItemGroup>
-		<!-- the naming convention attributes and their rules, so that the generator applies them at build time with the library's own code -->
-		<Compile Include="..\Datamodel.NET\Format.cs" Link="Format.cs" />
-	</ItemGroup>
+  <ItemGroup>
+    <!-- the naming convention attributes and their rules, so that the generator applies them at build time with the library's own code -->
+    <Compile Include="..\Datamodel.NET\Format.cs" Link="Format.cs" />
+  </ItemGroup>
 
-	<ItemGroup>
-		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.1.0" PrivateAssets="all" />
-		<PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.3.3" PrivateAssets="all" />
-	</ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.1.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.3.3" PrivateAssets="all" />
+  </ItemGroup>
 
 </Project>
