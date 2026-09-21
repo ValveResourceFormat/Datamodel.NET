@@ -1,4 +1,4 @@
-﻿using Datamodel.Codecs;
+using Datamodel.Codecs;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;

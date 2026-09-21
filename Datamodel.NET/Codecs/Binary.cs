@@ -1,16 +1,14 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Numerics;
 using System.IO;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Threading;
 
 namespace Datamodel.Codecs
 {
