@@ -73,7 +73,7 @@ namespace Datamodel
             if (GetType() != typeof(Element))
             {
                 var type = GetType().Name;
-                var index = type.IndexOf('`');
+                var index = type.IndexOf('`', StringComparison.Ordinal);
                 if (index > 0)
                 {
                     type = type[..index];
@@ -188,7 +188,7 @@ namespace Datamodel
             object? value = this[name];
 
             if (value is not T && !(typeof(T) == typeof(Element) && value == null))
-                throw new AttributeTypeException(string.Format("Attribute \"{0}\" ({1}) does not implement {2}.", name, value?.GetType().Name, typeof(T).Name));
+                throw new AttributeTypeException($"Attribute \"{name}\" ({value?.GetType().Name}) does not implement {typeof(T).Name}.");
 
             return (T?)value;
         }
@@ -211,7 +211,7 @@ namespace Datamodel
             }
             catch (AttributeTypeException)
             {
-                throw new AttributeTypeException(string.Format("Attribute \"{0}\" ({1}) is not an array.", name, this[name]?.GetType().Name));
+                throw new AttributeTypeException($"Attribute \"{name}\" ({this[name]?.GetType().Name}) is not an array.");
             }
 
         }
@@ -249,7 +249,7 @@ namespace Datamodel
 
         public override string ToString()
         {
-            return string.Format("{0}[{1}]", Name, ClassName);
+            return $"{Name}[{ClassName}]";
         }
 
         #region IEqualityComparer
@@ -270,7 +270,7 @@ namespace Datamodel
 
             public int GetHashCode(Element obj)
             {
-                return obj.Name.GetHashCode();
+                return obj.Name.GetHashCode(StringComparison.Ordinal);
             }
 
             bool IEqualityComparer.Equals(object? x, object? y)
@@ -300,7 +300,7 @@ namespace Datamodel
 
             public int GetHashCode(Element obj)
             {
-                return obj.ClassName.GetHashCode();
+                return obj.ClassName.GetHashCode(StringComparison.Ordinal);
             }
 
             bool IEqualityComparer.Equals(object? x, object? y)

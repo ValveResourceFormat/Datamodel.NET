@@ -3,12 +3,14 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.Serialization;
 using System.Security;
 using System.Numerics;
 using System.Collections.Concurrent;
+using System.Threading;
 using CodecRegistration = System.Tuple<string, int>;
 
 [assembly: System.CLSCompliant(true)]
@@ -213,7 +215,7 @@ namespace Datamodel
         #endregion
 
         #region Element factories
-        private static readonly object elementFactoryLock = new();
+        private static readonly Lock elementFactoryLock = new();
         private static IElementFactory[] elementFactories = [];
 
         /// <summary>
@@ -344,16 +346,17 @@ namespace Datamodel
         /// <param name="defer_mode">How to handle deferred loading.</param>
         public static Datamodel Load(string path, DeferredMode defer_mode = DeferredMode.Automatic)
         {
-            var stream = File.OpenRead(path);
-            Datamodel? dm = null;
+            FileStream? stream = File.OpenRead(path);
             try
             {
-                dm = Load_Internal<Element>(stream, defer_mode);
+                var dm = Load_Internal<Element>(stream, defer_mode);
+                if (dm.Codec != null)
+                    stream = null; // the datamodel keeps the stream open for deferred loading, and disposes it
                 return dm;
             }
             finally
             {
-                if (dm == null || defer_mode == DeferredMode.Disabled || dm.Codec == null) stream.Dispose();
+                stream?.Dispose();
             }
         }
         /// <summary>
@@ -392,10 +395,10 @@ namespace Datamodel
                 throw new InvalidOperationException("Could not read file header.");
 
             string encoding = match.Groups[1].Value;
-            int encoding_version = int.Parse(match.Groups[2].Value);
+            int encoding_version = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
 
             string format = match.Groups[3].Value;
-            int format_version = int.Parse(match.Groups[4].Value);
+            int format_version = int.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture);
 
             ICodec codec = GetCodec(encoding, encoding_version);
 
@@ -494,8 +497,18 @@ namespace Datamodel
         /// </summary>
         public void Dispose()
         {
-            Stream?.Dispose();
-            AllElements.Dispose();
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                Codec?.Dispose();
+                Stream?.Dispose();
+                AllElements.Dispose();
+            }
         }
 
         #region Properties
@@ -527,7 +540,7 @@ namespace Datamodel
                     throw new InvalidDataException("Format can not be null");
                 }
 
-                if (value.Contains(' '))
+                if (value.Contains(' ', StringComparison.Ordinal))
                     throw new ArgumentException("Format name cannot contain spaces.");
                 _Format = value;
                 OnPropertyChanged();
@@ -562,7 +575,7 @@ namespace Datamodel
                     throw new InvalidDataException("Encoding can not be null");
                 }
 
-                if (value.Contains(' '))
+                if (value.Contains(' ', StringComparison.Ordinal))
                     throw new ArgumentException("Encoding name cannot contain spaces.");
                 _Encoding = value;
                 OnPropertyChanged();
@@ -831,7 +844,7 @@ namespace Datamodel
                 job.ImportMap.Add(foreign_element, local_element);
 
                 // Copy attributes
-                if (local_element != null && !local_element.Stub)
+                if (!local_element.Stub)
                 {
                     local_element.Clear();
                     foreach (var attr in foreign_element)
@@ -869,9 +882,9 @@ namespace Datamodel
         /// Raised when the Datamodel's <see cref="Format"/>, <see cref="FormatVersion"/>, or <see cref="Root"/> changes.
         /// </summary>
         public event PropertyChangedEventHandler? PropertyChanged;
-        protected void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName()] string property = "")
+        protected void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName()] string propertyName = "")
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
         #endregion
     }
@@ -966,7 +979,7 @@ namespace Datamodel
     /// The exception that is thrown when an error occurs while destubbing an attribute value.
     /// </summary>
     [Serializable]
-    public class DestubException : Exception
+    public class DestubException : InvalidOperationException
     {
         internal DestubException(AttributeList owner, string attributeName, Exception innerException)
             : base("An exception occured while destubbing the value of an attribute.", innerException)

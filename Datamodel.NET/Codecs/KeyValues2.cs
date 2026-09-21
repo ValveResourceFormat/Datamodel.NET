@@ -6,6 +6,7 @@ using System.Numerics;
 using System.IO;
 using System.Globalization;
 using System.Collections;
+using System.Runtime.InteropServices;
 
 namespace Datamodel.Codecs
 {
@@ -50,7 +51,7 @@ namespace Datamodel.Codecs
 
             public KV2Writer(Stream output)
             {
-                Output = new StreamWriter(output, Datamodel.TextEncoding);
+                Output = new StreamWriter(output, Datamodel.TextEncoding, leaveOpen: true);
             }
 
             public void Dispose()
@@ -61,11 +62,11 @@ namespace Datamodel.Codecs
             public static string Sanitise(string value)
             {
                 return value
-                    .Replace("\\", "\\\\")
-                    .Replace("\"", "\\\"")
-                    .Replace("\n", "\\n")
-                    .Replace("\r", "\\r")
-                    .Replace("\t", "\\t");
+                    .Replace("\\", "\\\\", StringComparison.Ordinal)
+                    .Replace("\"", "\\\"", StringComparison.Ordinal)
+                    .Replace("\n", "\\n", StringComparison.Ordinal)
+                    .Replace("\r", "\\r", StringComparison.Ordinal)
+                    .Replace("\t", "\\t", StringComparison.Ordinal);
             }
 
             public static string Token(string value) => "\"" + Sanitise(value) + "\"";
@@ -104,11 +105,12 @@ namespace Datamodel.Codecs
                 return;
             }
 
-            if (ReferenceCount.ContainsKey(elem))
-                ReferenceCount[elem]++;
-            else
+            // the ref is not used once the recursion below may have resized the dictionary
+            ref var count = ref CollectionsMarshal.GetValueRefOrAddDefault(ReferenceCount, elem, out var seen);
+            count++;
+
+            if (!seen)
             {
-                ReferenceCount[elem] = 1;
                 foreach (var attr in Context.Attributes[elem])
                 {
                     if (attr.Value == null)
@@ -281,11 +283,11 @@ namespace Datamodel.Codecs
         public void Encode(Datamodel dm, string encoding, int encodingVersion, Stream stream)
         {
             Context = new SerializationContext();
-            var writer = new KV2Writer(stream);
+            using var writer = new KV2Writer(stream);
 
             SupportsReferenceIds = encoding != "keyvalues2_noids";
 
-            writer.WriteLine(string.Format(CodecUtilities.HeaderPattern, encoding, encodingVersion, dm.Format, dm.FormatVersion));
+            writer.WriteLine(CodecUtilities.FormatHeader(encoding, encodingVersion, dm.Format, dm.FormatVersion));
 
             ReferenceCount = [];
 
@@ -365,7 +367,7 @@ namespace Datamodel.Codecs
         }
 
         readonly StringBuilder TokenBuilder = new();
-        int Line = 0;
+        int Line;
         string Decode_NextToken(StreamReader reader)
         {
             TokenBuilder.Clear();
@@ -476,13 +478,13 @@ namespace Datamodel.Codecs
 
                 if (attr_type == null)
                     attr_value = Decode_ParseElement(resolver, attr_type_s, reader, dataModel, intermediateData);
-                else if (attr_type_s.EndsWith("_array"))
+                else if (attr_type_s.EndsWith("_array", StringComparison.Ordinal))
                 {
                     var array = CodecUtilities.MakeList(attr_type, 5); // assume 5 items
                     attr_value = array;
 
                     next = Decode_NextToken(reader);
-                    if (next != "[") throw new CodecException(String.Format("Expected array opener, got '{0}'.", next));
+                    if (next != "[") throw new CodecException($"Expected array opener, got '{next}'.");
                     while (true)
                     {
                         next = Decode_NextToken(reader);
@@ -602,13 +604,15 @@ namespace Datamodel.Codecs
 
         public Datamodel Decode(string encoding, int encoding_version, string format, int format_version, Stream stream, DeferredMode defer_mode, ElementTypeResolver resolver)
         {
-            var dataModel = new Datamodel(format, format_version);
-
             if (encoding == "keyvalues2_noids")
                 throw new NotImplementedException("KeyValues2_noids decoding not implemented.");
 
+#pragma warning disable CA2000 // the caller owns the returned datamodel, which holds nothing to release when decoding fails
+            var dataModel = new Datamodel(format, format_version);
+#pragma warning restore CA2000
+
             stream.Seek(0, SeekOrigin.Begin);
-            var reader = new StreamReader(stream, Datamodel.TextEncoding);
+            using var reader = new StreamReader(stream, Datamodel.TextEncoding, leaveOpen: true);
             reader.ReadLine(); // skip DMX header
             Line = 1;
             string next;

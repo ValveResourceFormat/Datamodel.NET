@@ -6,6 +6,8 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
 
+namespace Datamodel.Generator;
+
 /// <summary>
 /// Emits an <c>ElementFactory</c> into every assembly that declares subclasses of <c>Datamodel.Element</c>.
 /// The factory constructs those classes by name and describes their properties, save those marked <c>[DMIgnore]</c>, so that Datamodel.NET can load
@@ -59,7 +61,7 @@ public class ElementFactoryGenerator : IIncrementalGenerator
     {
         var provider = context.SyntaxProvider.CreateSyntaxProvider(
             predicate: static (node, _) => node is ClassDeclarationSyntax { BaseList: not null },
-            transform: static (ctx, _) => ctx.SemanticModel.GetDeclaredSymbol((ClassDeclarationSyntax)ctx.Node) as INamedTypeSymbol)
+            transform: static (ctx, cancellationToken) => ctx.SemanticModel.GetDeclaredSymbol((ClassDeclarationSyntax)ctx.Node, cancellationToken) as INamedTypeSymbol)
             .Where(static symbol => symbol is not null && InheritsFrom(symbol, ElementTypeName));
 
         var compilation = context.CompilationProvider.Combine(provider.Collect());
@@ -207,9 +209,9 @@ public class ElementFactoryGenerator : IIncrementalGenerator
                         /// <summary>
                         /// Constructs the class with the given name in the given namespace, or returns null when this assembly has none.
                         /// </summary>
-                        public Element? Create(string nameSpace, string className)
+                        public Element? Create(string classNamespace, string className)
                         {
-                            switch (nameSpace)
+                            switch (classNamespace)
                             {
 
                 """);

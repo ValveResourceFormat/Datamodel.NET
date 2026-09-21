@@ -13,11 +13,13 @@ using System.Threading;
 
 namespace Datamodel.Codecs
 {
-    class Binary : IDeferredAttributeCodec
+    sealed class Binary : IDeferredAttributeCodec
     {
         /// <summary>The types each encoding version supports, in the order of their ids. A null marks an id the version reserves for something the library does not read.</summary>
         static readonly Dictionary<int, AttributeType?[]> SupportedAttributes = [];
         BinaryReader? Reader;
+
+        public void Dispose() => Reader?.Dispose();
 
         /// <summary>
         /// Elements in the order the stream declares them. Element references are indices into this list, which must not change for deferred loading.
@@ -106,7 +108,7 @@ namespace Datamodel.Codecs
                 i++;
             }
             if (i == type_list.Length)
-                throw new CodecException(String.Format("\"{0}\" is not supported in encoding binary {1}", type.Name, version));
+                throw new CodecException($"\"{type.Name}\" is not supported in encoding binary {version}");
             if (array) i += (byte)(type_list.Length * (version >= 9 ? 2 : 1));
             return ++i;
         }
@@ -137,13 +139,13 @@ namespace Datamodel.Codecs
 
             if (id >= type_list.Length || type_list[id] is not AttributeType type)
             {
-                throw new CodecException(String.Format("Unrecognised attribute type: {0}", id + 1));
+                throw new CodecException($"Unrecognised attribute type: {id + 1}");
             }
 
             return (type, array);
         }
 
-        protected string ReadString_Raw(BinaryReader reader)
+        static string ReadString_Raw(BinaryReader reader)
         {
             List<byte> raw = [];
             while (true)
@@ -161,7 +163,6 @@ namespace Datamodel.Codecs
 
         class StringDictionary
         {
-            readonly Binary? Codec;
             readonly int EncodingVersion;
 
             readonly List<string> Strings = [];
@@ -184,17 +185,16 @@ namespace Datamodel.Codecs
             /// <summary>
             /// Constructs a new <see cref="StringDictionary"/> from a Binary stream.
             /// </summary>
-            public StringDictionary(Binary codec, BinaryReader reader)
+            public StringDictionary(int encoding_version, BinaryReader reader)
             {
-                Codec = codec;
-                EncodingVersion = codec.EncodingVersion;
+                EncodingVersion = encoding_version;
                 Dummy = EncodingVersion == 1;
                 if (!Dummy)
                 {
                     var count = LengthSize == sizeof(short) ? reader.ReadInt16() : reader.ReadInt32();
                     Strings.Capacity = count;
                     for (var i = 0; i < count; i++)
-                        Strings.Add(Codec.ReadString_Raw(reader));
+                        Strings.Add(ReadString_Raw(reader));
                 }
             }
 
@@ -257,7 +257,7 @@ namespace Datamodel.Codecs
 
             public string ReadString(BinaryReader reader)
             {
-                if (Dummy) return Codec!.ReadString_Raw(reader);
+                if (Dummy) return ReadString_Raw(reader);
                 return Strings[IndiceSize == sizeof(short) ? reader.ReadInt16() : reader.ReadInt32()];
             }
 
@@ -324,7 +324,7 @@ namespace Datamodel.Codecs
 
         // Specialized methods to avoid repeated vector allocations
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private object? ReadElement(Datamodel dm, BinaryReader reader)
+        private Element? ReadElement(Datamodel dm, BinaryReader reader)
         {
             var index = reader.ReadInt32();
 
@@ -403,7 +403,7 @@ namespace Datamodel.Codecs
 
             EncodingVersion = encoding_version;
 
-            Reader = new BinaryReader(stream);
+            Reader = new BinaryReader(stream, Datamodel.TextEncoding, leaveOpen: true); // the datamodel owns the stream
 
             if (EncodingVersion >= 9)
             {
@@ -420,7 +420,7 @@ namespace Datamodel.Codecs
                 }
             }
 
-            StringDict = new StringDictionary(this, Reader);
+            StringDict = new StringDictionary(EncodingVersion, Reader);
             var num_elements = Reader.ReadInt32();
 
             // the file states how many elements follow, so the tables that hold them are sized once
@@ -692,7 +692,7 @@ namespace Datamodel.Codecs
 
             public void Encode()
             {
-                Writer.Write(string.Format(CodecUtilities.HeaderPattern, "binary", EncodingVersion, Datamodel.Format, Datamodel.FormatVersion) + "\n");
+                Writer.Write(CodecUtilities.FormatHeader("binary", EncodingVersion, Datamodel.Format, Datamodel.FormatVersion) + "\n");
 
                 if (EncodingVersion >= 9)
                 {

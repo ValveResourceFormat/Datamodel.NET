@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 
 namespace Datamodel
 {
@@ -14,9 +15,9 @@ namespace Datamodel
         /// </summary>
         [DebuggerDisplay("Count = {Count}")]
         [DebuggerTypeProxy(typeof(DebugView))]
-        public class ElementList : IEnumerable<Element>, INotifyCollectionChanged, IDisposable
+        public sealed class ElementList : IEnumerable<Element>, INotifyCollectionChanged, IDisposable
         {
-            internal readonly object ChangeLock = new();
+            internal readonly Lock ChangeLock = new();
 
             internal class DebugView
             {
@@ -237,7 +238,7 @@ namespace Datamodel
                 }
             }
 
-            protected void WalkElemTree(Element? elem, HashSet<Element?> found)
+            private static void WalkElemTree(Element? elem, HashSet<Element?> found)
             {
                 if (elem is null)
                 {

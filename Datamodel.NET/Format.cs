@@ -15,25 +15,25 @@ public abstract class AttributeNamingConventionAttribute : System.Attribute
 /// <summary>
 /// This class' property names are mostly lowercase.
 /// </summary>
-public class LowercasePropertiesAttribute : AttributeNamingConventionAttribute
+public sealed class LowercasePropertiesAttribute : AttributeNamingConventionAttribute
 {
-    public override string GetAttributeName(string propertyName, Type _)
+    public override string GetAttributeName(string propertyName, Type propertyType)
         => NamingConventions.Lowercase(propertyName);
 }
 
 /// <summary>
 /// This class' property names are mostly camelCase.
 /// </summary>
-public class CamelCasePropertiesAttribute : AttributeNamingConventionAttribute
+public sealed class CamelCasePropertiesAttribute : AttributeNamingConventionAttribute
 {
-    public override string GetAttributeName(string propertyName, Type _)
+    public override string GetAttributeName(string propertyName, Type propertyType)
         => NamingConventions.CamelCase(propertyName);
 }
 
 /// <summary>
 /// This class' property names are mostly m_hungarian.
 /// </summary>
-public class HungarianPropertiesAttribute : CamelCasePropertiesAttribute
+public sealed class HungarianPropertiesAttribute : AttributeNamingConventionAttribute
 {
     public override string GetAttributeName(string propertyName, Type propertyType)
         => NamingConventions.Hungarian(propertyName, propertyType.FullName);
@@ -95,8 +95,10 @@ internal static class NamingConventions
     }
 
     /// <summary>The rule of <see cref="LowercasePropertiesAttribute"/>.</summary>
+#pragma warning disable CA1308 // lowercase is the convention, not a normalization
     public static string Lowercase(string propertyName)
         => propertyName.ToLowerInvariant();
+#pragma warning restore CA1308
 
     /// <summary>The rule of <see cref="CamelCasePropertiesAttribute"/>.</summary>
     public static string CamelCase(string propertyName)
@@ -116,7 +118,7 @@ internal static class NamingConventions
             _ => string.Empty,
         };
 
-        if (typeAnnotation == string.Empty)
+        if (typeAnnotation.Length == 0)
         {
             return "m_" + CamelCase(propertyName);
         }

@@ -124,17 +124,17 @@ namespace Datamodel
         /// <summary>
         /// Reads the property of the given element.
         /// </summary>
-        public abstract TValue Get(AttributeList owner);
+        public abstract TValue GetTypedValue(AttributeList owner);
 
         /// <summary>
         /// Writes the property of the given element.
         /// </summary>
         /// <exception cref="InvalidOperationException">Thrown when the property has no setter.</exception>
-        public abstract void Set(AttributeList owner, TValue value);
+        public abstract void SetTypedValue(AttributeList owner, TValue value);
 
-        public override object? GetValue(AttributeList owner) => Get(owner);
+        public override object? GetValue(AttributeList owner) => GetTypedValue(owner);
 
-        public override void SetValue(AttributeList owner, object? value) => Set(owner, (TValue)value!);
+        public override void SetValue(AttributeList owner, object? value) => SetTypedValue(owner, (TValue)value!);
     }
 
     /// <summary>
@@ -153,7 +153,7 @@ namespace Datamodel
             this.setter = setter;
         }
 
-        public override TValue Get(AttributeList owner) => getter((TElement)owner);
+        public override TValue GetTypedValue(AttributeList owner) => getter((TElement)owner);
 
         /// <summary>The type a slot stores values of <typeparamref name="TValue"/> as when they are stored inline, decided once per type; null for the reference types, which are classified per value.</summary>
         static readonly AttributeType? ValueKind = AttributeList.KindOf(typeof(TValue));
@@ -173,7 +173,7 @@ namespace Datamodel
             AttributeList.Classify(value, out kind, out inline, out reference);
         }
 
-        public override void Set(AttributeList owner, TValue value)
+        public override void SetTypedValue(AttributeList owner, TValue value)
         {
             if (setter == null)
             {

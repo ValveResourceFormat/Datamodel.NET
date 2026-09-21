@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Linq;
 using System.IO;
 using System.Numerics;
@@ -47,7 +48,7 @@ namespace Datamodel.Codecs
         /// <summary>
         /// Constructs a new, unowned instance of the class with the given name in the given namespace, or returns null when there is none.
         /// </summary>
-        Element? Create(string nameSpace, string className);
+        Element? Create(string classNamespace, string className);
 
         /// <summary>
         /// Gets the schemas of every class this factory constructs.
@@ -155,7 +156,7 @@ namespace Datamodel.Codecs
     /// <para>IDeferredAttributeCodec objects will be attached to their host Datamodel for the duration of its life.</para>
     /// </remarks>
     /// <seealso cref="CodecUtilities"/>
-    public interface IDeferredAttributeCodec : ICodec
+    public interface IDeferredAttributeCodec : ICodec, IDisposable
     {
         /// <summary>
         /// Called when an unloaded <see cref="Attribute"/> is accessed.
@@ -187,14 +188,15 @@ namespace Datamodel.Codecs
     public static class CodecUtilities
     {
         /// <summary>
-        /// Standard DMX header with CLR-style variable tokens.
-        /// </summary>
-        public const string HeaderPattern = "<!-- dmx encoding {0} {1} format {2} {3} -->";
-        /// <summary>
         /// Standard DMX header as a regular expression pattern.
         /// </summary>
         public const string HeaderPattern_Regex = "<!-- dmx encoding (\\S+) ([0-9]+) format (\\S+) ([0-9]+) -->";
-        //public const string HeaderPattern_Proto2 = "<!-- DMXVersion binary_v{0} -->";
+
+        /// <summary>
+        /// Formats the standard DMX header.
+        /// </summary>
+        public static string FormatHeader(string encoding, int encodingVersion, string format, int formatVersion)
+            => string.Create(CultureInfo.InvariantCulture, $"<!-- dmx encoding {encoding} {encodingVersion} format {format} {formatVersion} -->");
 
         /// <summary>
         /// Creates a <see cref="List{T}"/> for the given Type with the given starting size.

@@ -161,9 +161,9 @@ namespace Datamodel
 
         public bool Contains(T item) => IndexOf(item) >= 0;
 
-        public void CopyTo(T[] array, int offset)
+        public void CopyTo(T[] array, int arrayIndex)
         {
-            CopyTo_Internal(array, offset);
+            CopyTo_Internal(array, arrayIndex);
         }
 
         protected virtual void CopyTo_Internal(T[] array, int offset) => Items.CopyTo(array.AsSpan(offset));

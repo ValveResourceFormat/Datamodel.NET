@@ -432,7 +432,7 @@ namespace Datamodel
             {
                 // the generated binding of a class property takes the value as it is, so nothing is boxed on the way in
                 if (binding.CanWrite && binding is PropertyBinding<T> typed)
-                    typed.Set(this, value);
+                    typed.SetTypedValue(this, value);
                 else
                     SetProperty(binding, name, value);
                 return;
@@ -953,9 +953,9 @@ namespace Datamodel
         /// a custom Element property has changed.
         /// </summary>
         public event PropertyChangedEventHandler? PropertyChanged;
-        protected virtual void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName()] string property = "")
+        protected virtual void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName()] string propertyName = "")
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
         /// <summary>
@@ -970,7 +970,7 @@ namespace Datamodel
                 case NotifyCollectionChangedAction.Add:
                 case NotifyCollectionChangedAction.Remove:
                 case NotifyCollectionChangedAction.Reset:
-                    OnPropertyChanged("Count");
+                    OnPropertyChanged(nameof(Count));
                     break;
             }
 
